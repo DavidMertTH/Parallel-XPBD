@@ -1,4 +1,5 @@
-﻿using Unity.Burst;
+﻿using Parallel_XPBD;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -19,6 +20,7 @@ public class Xpbd
     public float Dampening;
     public float Compliance;
     public bool SolveParallel;
+    public bool SolveParallelJacobi;
 
     public Vector3[] CurrentParticlePositions;
 
@@ -35,7 +37,10 @@ public class Xpbd
     {
         Lambdas = new float[_toSimulate.Distances.Length];
         Integrate();
-        if (SolveParallel) SolveConstraintsParallel(subSteps);
+        if (SolveParallel)
+        {
+            SolveConstGroups(subSteps);
+        }
         else SolveConstraints(subSteps);
         UpdatePartícles();
     }
@@ -68,15 +73,15 @@ public class Xpbd
             for (int i = 0; i < _toSimulate.Distances.Length; i++)
             {
                 constraint = _toSimulate.Distances[i];
-                Gradients[i] = PredictedPositions[constraint.ParticleOne] - PredictedPositions[constraint.ParticleTwo];
+                Gradients[i] = PredictedPositions[constraint.ParticleA] - PredictedPositions[constraint.ParticleB];
                 DistError[i] = Gradients[i].magnitude - constraint.RestLenght;
                 Gradients[i].Normalize();
                 // Gradients[i] *= DistError[i];
 
                 float alpha = constraint.Compliance / (subStepLength * subStepLength);
 
-                float invMassOne = _toSimulate.Particles[constraint.ParticleOne].InvMass;
-                float invMassTwo = _toSimulate.Particles[constraint.ParticleTwo].InvMass;
+                float invMassOne = _toSimulate.Particles[constraint.ParticleA].InvMass;
+                float invMassTwo = _toSimulate.Particles[constraint.ParticleB].InvMass;
                 float massSum = invMassOne + invMassTwo;
 
 
@@ -84,21 +89,141 @@ public class Xpbd
                 float dlambda = (-DistError[i] - alpha * Lambdas[i]) / denom;
 
                 if (invMassOne > 0f)
-                    PredictedPositions[constraint.ParticleOne] += Gradients[i] * (invMassOne * dlambda);
+                    PredictedPositions[constraint.ParticleA] += Gradients[i] * (invMassOne * dlambda);
 
                 if (invMassTwo > 0f)
-                    PredictedPositions[constraint.ParticleTwo] += -Gradients[i] * (invMassTwo * dlambda);
+                    PredictedPositions[constraint.ParticleB] += -Gradients[i] * (invMassTwo * dlambda);
 
                 Lambdas[i] += dlambda;
             }
         }
     }
 
+    private void SolveConstGroups(int subSteps)
+    {
+        float subStepLength = TimeStepLength / subSteps;
+
+        NativeArray<Particle> nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
+        NativeArray<DistanceConstraint> nativeDistances =
+            new NativeArray<DistanceConstraint>(_toSimulate.Distances, Allocator.TempJob);
+        NativeArray<float> nativeLambdas = new NativeArray<float>(Lambdas, Allocator.TempJob);
+        NativeArray<Vector3> nativePredictedPositions = new NativeArray<Vector3>(PredictedPositions, Allocator.TempJob);
+        NativeArray<Vector3> nativeResultingPositions =
+            new NativeArray<Vector3>(PredictedPositions.Length, Allocator.TempJob);
+        NativeArray<int> partToConst = new NativeArray<int>(_toSimulate.ParticleToConst, Allocator.TempJob);
+        NativeArray<float> erorrs = new NativeArray<float>(DistError, Allocator.TempJob);
+
+        JobHandle[] prevJobs = new JobHandle[subSteps];
+        for (int s = 0; s < subSteps; s++)
+        {
+            SolveConstraintGroupJob groupJob = new SolveConstraintGroupJob()
+            {
+                Distances = nativeDistances,
+                Lambdas = nativeLambdas,
+                PredictedPositions = nativePredictedPositions,
+                ResultingPositions = nativeResultingPositions,
+                Particles = nativeParticles,
+                SubStepLength = subStepLength,
+                PartToConst = partToConst,
+                GroupToSolve = 0
+            };
+            JobHandle handle = new JobHandle();
+            if (s == 0)
+            {
+                handle = groupJob.Schedule(_toSimulate.Particles.Length, 8);
+            }
+            else
+            {
+                handle = groupJob.Schedule(_toSimulate.Particles.Length, 8, prevJobs[s - 1]);
+            }
+            
+            // nativePredictedPositions.CopyFrom(nativeResultingPositions);
+            SolveConstraintGroupJob groupJob1 = new SolveConstraintGroupJob()
+            {
+                Distances = nativeDistances,
+                Lambdas = nativeLambdas,
+                PredictedPositions = nativeResultingPositions,
+                ResultingPositions = nativePredictedPositions,
+                Particles = nativeParticles,
+                SubStepLength = subStepLength,
+                PartToConst = partToConst,
+                GroupToSolve = 1
+            };
+            JobHandle handle1 = groupJob1.Schedule(_toSimulate.Particles.Length, 8, handle);
+            SolveConstraintGroupJob groupJob2 = new SolveConstraintGroupJob()
+            {
+                Distances = nativeDistances,
+                Lambdas = nativeLambdas,
+                PredictedPositions = nativePredictedPositions,
+                ResultingPositions = nativeResultingPositions,
+                Particles = nativeParticles,
+                SubStepLength = subStepLength,
+                PartToConst = partToConst,
+                GroupToSolve = 2
+            };
+            JobHandle handle2 = groupJob2.Schedule(_toSimulate.Particles.Length, 8, handle1);
+            SolveConstraintGroupJob groupJob3 = new SolveConstraintGroupJob()
+            {
+                Distances = nativeDistances,
+                Lambdas = nativeLambdas,
+                PredictedPositions = nativeResultingPositions,
+                ResultingPositions = nativePredictedPositions,
+                Particles = nativeParticles,
+                SubStepLength = subStepLength,
+                PartToConst = partToConst,
+                GroupToSolve = 3
+            };
+            JobHandle handle3 = groupJob3.Schedule(_toSimulate.Particles.Length, 8, handle2);
+            SolveConstraintGroupJob groupJob4 = new SolveConstraintGroupJob()
+            {
+                Distances = nativeDistances,
+                Lambdas = nativeLambdas,
+                PredictedPositions = nativePredictedPositions,
+                ResultingPositions = nativeResultingPositions,
+                Particles = nativeParticles,
+                SubStepLength = subStepLength,
+                PartToConst = partToConst,
+                GroupToSolve = 4
+            };
+            JobHandle handle4 = groupJob4.Schedule(_toSimulate.Particles.Length, 8, handle3);
+            SolveConstraintGroupJob groupJob5 = new SolveConstraintGroupJob()
+            {
+                Distances = nativeDistances,
+                Lambdas = nativeLambdas,
+                PredictedPositions = nativeResultingPositions,
+                ResultingPositions = nativePredictedPositions,
+                Particles = nativeParticles,
+                SubStepLength = subStepLength,
+                PartToConst = partToConst,
+                GroupToSolve = 5
+            };
+            if (s == subSteps - 1)
+            {
+                groupJob5.Schedule(_toSimulate.Particles.Length, 8, handle4).Complete();
+            }
+            else
+            {
+                prevJobs[s] = groupJob5.Schedule(_toSimulate.Particles.Length, 8, handle4);
+            }
+        }
+
+        erorrs.CopyTo(DistError);
+        nativePredictedPositions.CopyTo(PredictedPositions);
+
+        nativeParticles.Dispose();
+        nativeDistances.Dispose();
+        nativeLambdas.Dispose();
+        nativePredictedPositions.Dispose();
+        nativeResultingPositions.Dispose();
+        partToConst.Dispose();
+        erorrs.Dispose();
+    }
 
     private void UpdatePartícles()
     {
         NativeArray<Particle> nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
-        NativeArray<Vector3> nativePredictedPositions = new NativeArray<Vector3>(PredictedPositions, Allocator.TempJob);
+        NativeArray<Vector3> nativePredictedPositions =
+            new NativeArray<Vector3>(PredictedPositions, Allocator.TempJob);
 
         PositionUpdateJob updateJob = new PositionUpdateJob()
         {
@@ -111,26 +236,26 @@ public class Xpbd
         if (CurrentParticlePositions == null) CurrentParticlePositions = new Vector3[_toSimulate.Particles.Length];
 
         nativePredictedPositions.CopyTo(CurrentParticlePositions);
-        for (int i = 0; i < CurrentParticlePositions.Length; i++)
-        {
-            CurrentParticlePositions[i] = _toSimulate.transform.TransformPoint(CurrentParticlePositions[i]);
-        }       
-        
+        // for (int i = 0; i < CurrentParticlePositions.Length; i++)
+        // {
+        //     CurrentParticlePositions[i] = _toSimulate.transform.TransformPoint(CurrentParticlePositions[i]);
+        // }       
+
         nativeParticles.CopyTo(_toSimulate.Particles);
         nativeParticles.Dispose();
         nativePredictedPositions.Dispose();
     }
 
+
     private void SolveConstraintsParallel(int subSteps)
     {
         float subStepLength = TimeStepLength / subSteps;
-
-
         NativeArray<Particle> nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
         NativeArray<DistanceConstraint> nativeDistances =
             new NativeArray<DistanceConstraint>(_toSimulate.Distances, Allocator.TempJob);
         NativeArray<float> nativeLambdas = new NativeArray<float>(Lambdas, Allocator.TempJob);
-        NativeArray<Vector3> nativePredictedPositions = new NativeArray<Vector3>(PredictedPositions, Allocator.TempJob);
+        NativeArray<Vector3> nativePredictedPositions =
+            new NativeArray<Vector3>(PredictedPositions, Allocator.TempJob);
 
         NativeArray<Vector3> deltaResultOne =
             new NativeArray<Vector3>(nativeDistances.Length, Allocator.TempJob);
@@ -187,10 +312,10 @@ public class Xpbd
             Errors = erorrs,
         };
         errorJob.Schedule(nativeDistances.Length, 32).Complete();
+
         erorrs.CopyTo(DistError);
-
-
         nativePredictedPositions.CopyTo(PredictedPositions);
+
         nativeParticles.Dispose();
         nativeDistances.Dispose();
         nativeLambdas.Dispose();
@@ -252,7 +377,7 @@ public class Xpbd
         public void Execute(int index)
         {
             DistanceConstraint constraint = Distances[index];
-            Vector3 grad = PredictedPositions[constraint.ParticleOne] - PredictedPositions[constraint.ParticleTwo];
+            Vector3 grad = PredictedPositions[constraint.ParticleA] - PredictedPositions[constraint.ParticleB];
             Errors[index] = grad.magnitude - constraint.RestLenght;
         }
     }
@@ -274,12 +399,12 @@ public class Xpbd
                 int constrainIndex = PartToConst[index * 12 + i];
                 if (constrainIndex == -1) continue;
                 DistanceConstraint constrain = Distances[constrainIndex];
-                if (constrain.ParticleOne == index)
+                if (constrain.ParticleA == index)
                 {
                     PredictedPositions[index] += ResOne[constrainIndex] * 0.3f;
                 }
 
-                if (constrain.ParticleTwo == index)
+                if (constrain.ParticleB == index)
                 {
                     PredictedPositions[index] += ResTwo[constrainIndex] * 0.3f;
                 }
@@ -303,14 +428,14 @@ public class Xpbd
         public void Execute(int index)
         {
             var constraint = Distances[index];
-            Vector3 gradient = PredictedPositions[constraint.ParticleOne] - PredictedPositions[constraint.ParticleTwo];
+            Vector3 gradient = PredictedPositions[constraint.ParticleA] - PredictedPositions[constraint.ParticleB];
             float distError = gradient.magnitude - constraint.RestLenght;
             gradient.Normalize();
 
             float alpha = constraint.Compliance / (SubStepLength * SubStepLength);
 
-            float invMassOne = Particles[constraint.ParticleOne].InvMass;
-            float invMassTwo = Particles[constraint.ParticleTwo].InvMass;
+            float invMassOne = Particles[constraint.ParticleA].InvMass;
+            float invMassTwo = Particles[constraint.ParticleB].InvMass;
             float massSum = invMassOne + invMassTwo;
 
 
@@ -321,6 +446,87 @@ public class Xpbd
             DeltaResTwo[index] = -gradient * (invMassTwo * dlambda);
 
             Lambdas[index] += dlambda;
+        }
+    }
+
+    [BurstCompile]
+    private struct SolveConstraintGroupJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<Particle> Particles;
+        [ReadOnly] public NativeArray<DistanceConstraint> Distances;
+        [ReadOnly] public NativeArray<int> PartToConst;
+
+        [ReadOnly] public NativeArray<Vector3> PredictedPositions;
+        public NativeArray<Vector3> ResultingPositions;
+
+        public NativeArray<float> Lambdas;
+        public float SubStepLength;
+        public int GroupToSolve;
+
+
+        public void Execute(int index)
+        {
+            if (Particles[index].InvMass == 0)
+            {
+                ResultingPositions[index] = PredictedPositions[index]; //+ moveDirSum * 0.1f;
+                return;
+            }
+
+            Vector3 moveDirSum = Vector3.zero;
+
+            for (int i = 0; i < 12; i++)
+            {
+                Vector3 posSelf = Vector3.zero;
+                Vector3 posOther = Vector3.zero;
+                int constrainIndex = PartToConst[index * 12 + i];
+                if (constrainIndex == -1) continue;
+                var constraint = Distances[constrainIndex];
+                Particle selfParticle = new Particle();
+                Particle otherParticle = new Particle();
+
+                if (constraint.ParticleA == index)
+                {
+                    if (constraint.PartAGroup != GroupToSolve) continue;
+
+                    selfParticle = Particles[constraint.ParticleA];
+                    otherParticle = Particles[constraint.ParticleB];
+
+                    posSelf = PredictedPositions[constraint.ParticleA];
+                    posOther = PredictedPositions[constraint.ParticleB];
+                }
+
+                if (constraint.ParticleB == index)
+                {
+                    if (constraint.PartBGroup != GroupToSolve) continue;
+
+                    selfParticle = Particles[constraint.ParticleB];
+                    otherParticle = Particles[constraint.ParticleA];
+
+                    posSelf = PredictedPositions[constraint.ParticleB];
+                    posOther = PredictedPositions[constraint.ParticleA];
+                }
+
+                Vector3 gradient = posOther - posSelf;
+                float distError = gradient.magnitude - constraint.RestLenght;
+
+                gradient.Normalize();
+
+                float alpha = constraint.Compliance / (SubStepLength * SubStepLength);
+
+                float invMassOne = selfParticle.InvMass;
+                float invMassTwo = otherParticle.InvMass;
+                float massSum = invMassOne + invMassTwo;
+
+
+                float denom = massSum + alpha;
+                float dlambda = (-distError - alpha * Lambdas[index]) / denom;
+
+                moveDirSum -= gradient * (invMassOne * dlambda);
+
+                Lambdas[index] += dlambda;
+            }
+
+            ResultingPositions[index] = PredictedPositions[index] + moveDirSum * 0.5f;
         }
     }
 }

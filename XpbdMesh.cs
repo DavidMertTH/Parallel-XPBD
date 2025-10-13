@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Parallel_XPBD;
 using UnityEngine;
 using UnityEngine.Serialization;
@@ -11,8 +12,14 @@ public class XpbdMesh : MonoBehaviour
     public int xSize = 20;
     public int ySize = 20;
     public bool reset;
-    public bool solveParallel;
     public bool drawGizmos;
+    public Xpbd.Solver solver;
+    public SphereChain collidingSpheres;
+    public SpatialHashMap HashMapSpheres;
+    public SpatialHashMap HashMapSelf;
+
+    public Display debugUi;
+    public bool handleSelfCollision;
 
     [Range(1, 200)] public int subSteps = 50;
     [Range(0f, 1f)] public float dampening = 0.05f;
@@ -29,13 +36,16 @@ public class XpbdMesh : MonoBehaviour
     public DistCon DistancesShear;
     public DistCon DistancesBend;
 
-    public int[] ParticleToConst;
+    [HideInInspector] public int[] ParticleToConst;
     private Mesh _mesh;
     private MeshFilter _meshFilter;
+
 
     void Awake()
     {
         Reset();
+        HashMapSpheres = new SpatialHashMap();
+        HashMapSelf = new SpatialHashMap();
     }
 
     private void Update()
@@ -45,10 +55,31 @@ public class XpbdMesh : MonoBehaviour
             Reset();
         }
 
+        float t5 = Time.realtimeSinceStartup;
+        float t1 = Time.realtimeSinceStartup;
         xpbd.Simulate(subSteps);
-        // Particles[0].Position = transform.position;
-
+        float t2 = Time.realtimeSinceStartup;
         UpdateMesh();
+
+
+        HashMapSpheres.SaveGridPositionsParallel(collidingSpheres.Spheres.ToList(), 1f);
+        float t3 = Time.realtimeSinceStartup;
+        xpbd.HandleCollisions(HashMapSpheres);
+        float t4 = Time.realtimeSinceStartup;
+
+
+        if (handleSelfCollision)
+        {
+            HashMapSelf.SaveGridPositionsParallel(Particles, 2f, this.transform);
+            xpbd.HandleCollisions(HashMapSelf);
+            //HandleGroundplane();
+        }
+
+        debugUi.simTime = (t2 - t1) * 1000;
+        debugUi.collisionTime = (t4 - t3) * 1000;
+        debugUi.colEntryTime = (t1 - t5) * 1000;
+        debugUi.numConstraints = Distances.Length;
+        debugUi.numParticles = Particles.Length;
     }
 
     private void Reset()
@@ -56,17 +87,25 @@ public class XpbdMesh : MonoBehaviour
         CreateParticles();
         xpbd = new Xpbd(this);
         xpbd.Dampening = dampening;
-        xpbd.SolveParallel = solveParallel;
+        xpbd.SolverToUse = solver;
+        xpbd.TimeStepLength = this.timeStep;
         SetupMesh();
         reset = false;
     }
 
-    private void OnValidate()
+    private void HandleGroundplane()
     {
-        if (xpbd == null) return;
-        xpbd.Dampening = dampening;
-        xpbd.TimeStepLength = timeStep;
-        xpbd.SolveParallel = solveParallel;
+        transform.TransformPoints(xpbd.CurrentParticlePositions);
+        //float[] yDisplacements = new float[Particles.Length];
+        for (int i = 0; i < Particles.Length; i++)
+        {
+            if (xpbd.CurrentParticlePositions[i].y < 0f)
+            {
+                xpbd.CurrentParticlePositions[i].y = 0;
+            }
+        }
+
+        transform.InverseTransformPoints(xpbd.CurrentParticlePositions);
     }
 
     private void SetupMesh()
@@ -482,10 +521,10 @@ public class XpbdMesh : MonoBehaviour
         for (int i = 0; i < Distances.Length; i++)
         {
             Color color = new Color(Mathf.Abs(xpbd.DistError[i]), 0, 1 - Mathf.Abs(xpbd.DistError[i]), 1);
-            
+
             Gizmos.color = color;
-            Gizmos.DrawLine(Particles[Distances[i].ParticleA].Position,
-                Particles[Distances[i].ParticleB].Position);
+            Gizmos.DrawLine(xpbd.CurrentParticlePositions[Distances[i].ParticleA],
+                xpbd.CurrentParticlePositions[Distances[i].ParticleB]);
 
             if (Distances[i].PartAGroup < 4) continue;
             if (Distances[i].PartBGroup < 4) continue;
@@ -512,7 +551,7 @@ public class XpbdMesh : MonoBehaviour
             //     Gizmos.color = Color.magenta;
             // }
 
-            Gizmos.DrawSphere(Particles[Distances[i].ParticleB].Position, 0.1f);
+            Gizmos.DrawSphere(xpbd.CurrentParticlePositions[Distances[i].ParticleB], 0.1f * transform.localScale.x);
 
             // if (Distances[i].PartBGroup == 1)
             // {

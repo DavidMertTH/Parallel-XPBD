@@ -19,10 +19,16 @@ public class Xpbd
     public float[] Lambdas;
     public float Dampening;
     public float Compliance;
-    public bool SolveParallel;
-    public bool SolveParallelJacobi;
+    public Solver SolverToUse;
 
     public Vector3[] CurrentParticlePositions;
+
+    public enum Solver
+    {
+        Seriel,
+        Jacobi,
+        ParticleColorGroups
+    }
 
     public Xpbd(XpbdMesh toSimulate)
     {
@@ -37,11 +43,21 @@ public class Xpbd
     {
         Lambdas = new float[_toSimulate.Distances.Length];
         Integrate();
-        if (SolveParallel)
+        if (SolverToUse == Solver.Seriel)
+        {
+            SolveConstraints(subSteps);
+        }
+
+        if (SolverToUse == Solver.Jacobi)
+        {
+            SolveConstraintsParallel(subSteps);
+        }
+
+        if (SolverToUse == Solver.ParticleColorGroups)
         {
             SolveConstGroups(subSteps);
         }
-        else SolveConstraints(subSteps);
+
         UpdatePartícles();
     }
 
@@ -102,6 +118,7 @@ public class Xpbd
     private void SolveConstGroups(int subSteps)
     {
         float subStepLength = TimeStepLength / subSteps;
+        //Lambdas = new float[_toSimulate.Distances.Length];
 
         NativeArray<Particle> nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
         NativeArray<DistanceConstraint> nativeDistances =
@@ -112,6 +129,7 @@ public class Xpbd
             new NativeArray<Vector3>(PredictedPositions.Length, Allocator.TempJob);
         NativeArray<int> partToConst = new NativeArray<int>(_toSimulate.ParticleToConst, Allocator.TempJob);
         NativeArray<float> erorrs = new NativeArray<float>(DistError, Allocator.TempJob);
+
 
         JobHandle[] prevJobs = new JobHandle[subSteps];
         for (int s = 0; s < subSteps; s++)
@@ -136,7 +154,7 @@ public class Xpbd
             {
                 handle = groupJob.Schedule(_toSimulate.Particles.Length, 8, prevJobs[s - 1]);
             }
-            
+
             // nativePredictedPositions.CopyFrom(nativeResultingPositions);
             SolveConstraintGroupJob groupJob1 = new SolveConstraintGroupJob()
             {
@@ -236,11 +254,6 @@ public class Xpbd
         if (CurrentParticlePositions == null) CurrentParticlePositions = new Vector3[_toSimulate.Particles.Length];
 
         nativePredictedPositions.CopyTo(CurrentParticlePositions);
-        // for (int i = 0; i < CurrentParticlePositions.Length; i++)
-        // {
-        //     CurrentParticlePositions[i] = _toSimulate.transform.TransformPoint(CurrentParticlePositions[i]);
-        // }       
-
         nativeParticles.CopyTo(_toSimulate.Particles);
         nativeParticles.Dispose();
         nativePredictedPositions.Dispose();
@@ -325,6 +338,41 @@ public class Xpbd
         partToConst.Dispose();
         erorrs.Dispose();
     }
+
+    public void HandleCollisions(SpatialHashMap hashMap)
+    {
+        _toSimulate.transform.TransformPoints(CurrentParticlePositions);
+        Vector3[] displacement = hashMap.AccessHashMapParallel(CurrentParticlePositions);
+        _toSimulate.transform.InverseTransformPoints(CurrentParticlePositions);
+
+
+        for (int i = 0; i < _toSimulate.Particles.Length; i++)
+        {
+            if (displacement[i] == Vector3.zero) continue;
+            Vector3 newPosition = _toSimulate.Particles[i].Position + displacement[i] + displacement[i].normalized * 0.01f;
+
+            Particle particle = new Particle()
+            {
+                Position = newPosition,
+                Velocity = newPosition - _toSimulate.Particles[i].Position,
+                InvMass = _toSimulate.Particles[i].InvMass,
+            };
+            _toSimulate.Particles[i] = particle;
+        }
+    }
+
+    [BurstCompile]
+    public struct HandleCollisionsJob : IJobParallelFor
+    {
+        public NativeArray<Vector3> Offsets;
+        public NativeArray<Vector3> Positions;
+
+        public void Execute(int index)
+        {
+            Positions[index] += Offsets[index];
+        }
+    }
+
 
     [BurstCompile]
     private struct PositionUpdateJob : IJobParallelFor

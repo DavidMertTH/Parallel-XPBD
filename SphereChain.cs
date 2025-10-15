@@ -55,7 +55,7 @@ public class SphereChain : MonoBehaviour
     private void OnDrawGizmos()
     {
         if(Spheres == null) return;
-        Gizmos.color = Color.forestGreen;
+        // Gizmos.color = Color.forestGreen;
         foreach (var sphere in Spheres)
         {
             Gizmos.DrawWireSphere(sphere.Position, sphere.Radius);

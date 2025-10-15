@@ -8,6 +8,7 @@ public class GrabInteraction : MonoBehaviour
     private Vector3 _rayDir;
     private bool _mouseIsDown;
     private int _currentVertexToMove = -1;
+    private float originalInvMass;
 
     private void Awake()
     {
@@ -15,15 +16,11 @@ public class GrabInteraction : MonoBehaviour
         _xpbdMesh = gameObject.GetComponent<XpbdMesh>();
     }
 
-    private void Start()
-    {
-    }
-
     private void Update()
     {
         _collider.sharedMesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
-
         _collider.sharedMesh.RecalculateBounds();
+        
         ListenForInputs();
     }
 
@@ -51,6 +48,7 @@ public class GrabInteraction : MonoBehaviour
                     exactSearch: false)) // auf true stellen für exakte Suche
             {
                 _currentVertexToMove = idx;
+                originalInvMass = _xpbdMesh.Particles[idx].InvMass;
             }
             else
             {
@@ -58,8 +56,12 @@ public class GrabInteraction : MonoBehaviour
             }
         }
 
-        if (Input.GetMouseButtonUp(0) && _mouseIsDown)
+        if (Input.GetMouseButtonUp(0))
         {
+            if (_currentVertexToMove != -1)
+            {
+                _xpbdMesh.Particles[_currentVertexToMove].InvMass = originalInvMass;
+            }
             _mouseIsDown = false;
             _currentVertexToMove = -1;
         }
@@ -89,7 +91,7 @@ public class GrabInteraction : MonoBehaviour
         {
             Velocity = Vector3.zero,
             Position = endPoint,
-            InvMass = _xpbdMesh.Particles[_currentVertexToMove].InvMass
+            InvMass = 0
         };
     }
 

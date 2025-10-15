@@ -1,9 +1,7 @@
-using System;
 using System.Collections.Generic;
-using System.Linq;
 using Parallel_XPBD;
+using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
 
 public class XpbdMesh : MonoBehaviour
@@ -17,7 +15,6 @@ public class XpbdMesh : MonoBehaviour
     public SphereChain collidingSpheres;
     public SpatialHashMap HashMapSpheres;
     public SpatialHashMap HashMapSelf;
-
     public Display debugUi;
     public bool handleSelfCollision;
 
@@ -32,11 +29,8 @@ public class XpbdMesh : MonoBehaviour
     public Particle[] Particles;
     public DistanceConstraint[] Distances;
 
-    public DistCon DistancesNext;
-    public DistCon DistancesShear;
-    public DistCon DistancesBend;
-
     [HideInInspector] public int[] ParticleToConst;
+
     private Mesh _mesh;
     private MeshFilter _meshFilter;
 
@@ -55,31 +49,9 @@ public class XpbdMesh : MonoBehaviour
             Reset();
         }
 
-        float t5 = Time.realtimeSinceStartup;
-        float t1 = Time.realtimeSinceStartup;
+        Particles[0].Position = transform.position;
         xpbd.Simulate(subSteps);
-        float t2 = Time.realtimeSinceStartup;
         UpdateMesh();
-
-
-        HashMapSpheres.SaveGridPositionsParallel(collidingSpheres.Spheres.ToList(), 1f);
-        float t3 = Time.realtimeSinceStartup;
-        xpbd.HandleCollisions(HashMapSpheres);
-        float t4 = Time.realtimeSinceStartup;
-
-
-        if (handleSelfCollision)
-        {
-            HashMapSelf.SaveGridPositionsParallel(Particles, 2f, this.transform);
-            xpbd.HandleCollisions(HashMapSelf);
-            //HandleGroundplane();
-        }
-
-        debugUi.simTime = (t2 - t1) * 1000;
-        debugUi.collisionTime = (t4 - t3) * 1000;
-        debugUi.colEntryTime = (t1 - t5) * 1000;
-        debugUi.numConstraints = Distances.Length;
-        debugUi.numParticles = Particles.Length;
     }
 
     private void Reset()
@@ -87,25 +59,10 @@ public class XpbdMesh : MonoBehaviour
         CreateParticles();
         xpbd = new Xpbd(this);
         xpbd.Dampening = dampening;
-        xpbd.SolverToUse = solver;
         xpbd.TimeStepLength = this.timeStep;
         SetupMesh();
         reset = false;
-    }
-
-    private void HandleGroundplane()
-    {
-        transform.TransformPoints(xpbd.CurrentParticlePositions);
-        //float[] yDisplacements = new float[Particles.Length];
-        for (int i = 0; i < Particles.Length; i++)
-        {
-            if (xpbd.CurrentParticlePositions[i].y < 0f)
-            {
-                xpbd.CurrentParticlePositions[i].y = 0;
-            }
-        }
-
-        transform.InverseTransformPoints(xpbd.CurrentParticlePositions);
+        xpbd.SetSolver(solver);
     }
 
     private void SetupMesh()
@@ -142,7 +99,8 @@ public class XpbdMesh : MonoBehaviour
             _meshFilter.mesh = _mesh;
         }
 
-        _mesh.vertices = xpbd.CurrentParticlePositions;
+
+        _mesh.vertices = Helper.FloatToVectorParallel(xpbd.ParticlePositions);
         _mesh.RecalculateNormals();
     }
 
@@ -346,146 +304,6 @@ public class XpbdMesh : MonoBehaviour
         return index % xSize;
     }
 
-    private DistCon GetNeighborDistanceConstraints()
-    {
-        DistCon neighbors = new DistCon();
-
-        List<Connection> distanceList = new List<Connection>();
-        neighbors.Groups = new int[Particles.Length];
-
-        for (int i = 0; i < Particles.Length; i++)
-        {
-            int currentColumn = i % xSize;
-            int currentRow = (i / xSize);
-            if (currentRow % 2 == 0) neighbors.Groups[i] = currentColumn % 2;
-            else neighbors.Groups[i] = (currentColumn + 1) % 2;
-
-            if (i >= xSize)
-            {
-                Connection distTop = new Connection()
-                {
-                    ParticleOne = i,
-                    ParticleTwo = i - xSize,
-                    RestLenght = Vector3.Distance(Particles[i].Position, Particles[i - xSize].Position),
-                    Compliance = compliance * 0.0000000001f,
-                };
-
-                distanceList.Add(distTop);
-            }
-
-            if (i % xSize != 0)
-            {
-                Connection distLeft = new Connection()
-                {
-                    ParticleOne = i,
-                    ParticleTwo = i - 1,
-                    RestLenght = Vector3.Distance(Particles[i].Position, Particles[i - 1].Position),
-                    Compliance = compliance * 0.0000000001f,
-                };
-                distanceList.Add(distLeft);
-            }
-        }
-
-        neighbors.Connections = distanceList.ToArray();
-        return neighbors;
-    }
-
-    private DistCon GetBendDistanceConstraints()
-    {
-        DistCon neighbors = new DistCon();
-
-        List<Connection> distanceList = new List<Connection>();
-        neighbors.Groups = new int[Particles.Length];
-
-        for (int i = 0; i < Particles.Length; i++)
-        {
-            int currentColumn = i % xSize;
-            int currentRow = ((i + 1) / xSize);
-            if (currentRow % 4 < 2)
-            {
-                neighbors.Groups[i] = 0;
-                if (currentColumn % 4 < 2)
-                    neighbors.Groups[i] = 1;
-            }
-            else
-            {
-                neighbors.Groups[i] = 1;
-                if (currentColumn % 4 < 2)
-                    neighbors.Groups[i] = 0;
-            }
-
-
-            if (i >= xSize * 2)
-            {
-                Connection distTop = new Connection()
-                {
-                    ParticleOne = i,
-                    ParticleTwo = i - xSize * 2,
-                    RestLenght = Vector3.Distance(Particles[i].Position, Particles[i - xSize * 2].Position),
-                    Compliance = bendingCompliance * 0.0000000001f
-                };
-
-                distanceList.Add(distTop);
-            }
-
-            if (i % xSize < xSize - 2)
-            {
-                Connection distRight = new Connection()
-                {
-                    ParticleOne = i,
-                    ParticleTwo = i + 2,
-                    RestLenght = Vector3.Distance(Particles[i].Position, Particles[i + 2].Position),
-                    Compliance = bendingCompliance * 0.0000000001f
-                };
-
-                distanceList.Add(distRight);
-            }
-        }
-
-        neighbors.Connections = distanceList.ToArray();
-        return neighbors;
-    }
-
-    private DistCon GetShearDistanceConstraints()
-    {
-        DistCon neighbors = new DistCon();
-
-        List<Connection> distanceList = new List<Connection>();
-        neighbors.Groups = new int[Particles.Length];
-
-        for (int i = 0; i < Particles.Length; i++)
-        {
-            int currentRow = (i / xSize);
-            neighbors.Groups[i] = currentRow % 2;
-
-            if (i >= xSize && i % xSize != 0)
-            {
-                Connection distLeftTop = new Connection()
-                {
-                    ParticleOne = i,
-                    ParticleTwo = i - xSize - 1,
-                    RestLenght = Vector3.Distance(Particles[i].Position, Particles[i - xSize - 1].Position),
-                    Compliance = sheerCompliance * 0.0000000001f
-                };
-                distanceList.Add(distLeftTop);
-            }
-
-            if (i >= xSize && i % xSize != xSize - 1)
-            {
-                Connection distRightTop = new Connection()
-                {
-                    ParticleOne = i,
-                    ParticleTwo = i - xSize + 1,
-                    RestLenght = Vector3.Distance(Particles[i].Position, Particles[i - xSize + 1].Position),
-                    Compliance = sheerCompliance * 0.0000000001f
-                };
-                distanceList.Add(distRightTop);
-            }
-        }
-
-        neighbors.Connections = distanceList.ToArray();
-        return neighbors;
-    }
 
     private Vector3[] GetParticlePositions()
     {
@@ -504,65 +322,19 @@ public class XpbdMesh : MonoBehaviour
         return positions;
     }
 
+
     private void OnDrawGizmos()
     {
         if (!drawGizmos || Particles == null || Distances == null || xpbd == null) return;
 
-        for (int i = 0; i < Particles.Length; i++)
-        {
-            // Gizmos.DrawSphere(Particles[i].Position, 0.1f);
-            //
-            // if (DistancesNext.Groups[i] == 0) Gizmos.color = Color.red;
-            // if (DistancesNext.Groups[i] == 1) Gizmos.color = Color.blue;
-            // if (DistancesNext.Groups[i] == 2) Gizmos.color = Color.yellow;
-            // if (DistancesNext.Groups[i] == 3) Gizmos.color = Color.white;
-        }
-
         for (int i = 0; i < Distances.Length; i++)
         {
-            Color color = new Color(Mathf.Abs(xpbd.DistError[i]), 0, 1 - Mathf.Abs(xpbd.DistError[i]), 1);
+            Gizmos.DrawLine(Particles[Distances[i].ParticleA].Position, Particles[Distances[i].ParticleB].Position);
+        }
 
-            Gizmos.color = color;
-            Gizmos.DrawLine(xpbd.CurrentParticlePositions[Distances[i].ParticleA],
-                xpbd.CurrentParticlePositions[Distances[i].ParticleB]);
-
-            if (Distances[i].PartAGroup < 4) continue;
-            if (Distances[i].PartBGroup < 4) continue;
-
-            // if (Distances[i].PartAGroup == 4)
-            // {
-            //     Gizmos.color = Color.green;
-            // }
-            //
-            // if (Distances[i].PartAGroup == 5)
-            // {
-            //     Gizmos.color = Color.magenta;
-            // }
-            //
-            // Gizmos.DrawSphere(Particles[Distances[i].ParticleA].Position, 0.1f);
-            //
-            // if (Distances[i].PartBGroup == 4)
-            // {
-            //     Gizmos.color = Color.green;
-            // }
-            //
-            // if (Distances[i].PartBGroup == 5)
-            // {
-            //     Gizmos.color = Color.magenta;
-            // }
-
-            Gizmos.DrawSphere(xpbd.CurrentParticlePositions[Distances[i].ParticleB], 0.1f * transform.localScale.x);
-
-            // if (Distances[i].PartBGroup == 1)
-            // {
-            //     Gizmos.color = Color.green;
-            // }
-            // if (Distances[i].PartBGroup == 0)
-            // {
-            //     Gizmos.color = Color.magenta;
-            // }
-            //
-            // Gizmos.DrawSphere(Particles[Distances[i].ParticleB].Position, 0.1f);
+        for (int i = 0; i < Particles.Length; i++)
+        {
+            Gizmos.DrawSphere(Particles[i].Position, 0.1f);
         }
     }
 }
@@ -570,8 +342,8 @@ public class XpbdMesh : MonoBehaviour
 public struct Particle
 {
     public float InvMass;
-    public Vector3 Position;
-    public Vector3 Velocity;
+    public float3 Position;
+    public float3 Velocity;
 }
 
 public struct DistanceConstraint

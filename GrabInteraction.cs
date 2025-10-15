@@ -18,9 +18,6 @@ public class GrabInteraction : MonoBehaviour
 
     private void Update()
     {
-        _collider.sharedMesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
-        _collider.sharedMesh.RecalculateBounds();
-        
         ListenForInputs();
     }
 
@@ -33,6 +30,9 @@ public class GrabInteraction : MonoBehaviour
 
         if (Input.GetMouseButtonDown(0) && !_mouseIsDown)
         {
+            _collider.sharedMesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
+            _collider.sharedMesh.RecalculateBounds();
+
             _mouseIsDown = true;
             Camera cam = Camera.main;
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);

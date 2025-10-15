@@ -1,8 +1,10 @@
 ﻿using Parallel_XPBD;
+using Parallel_XPBD.Collisions;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using UnityEngine;
 
 
 public class Xpbd
@@ -10,6 +12,8 @@ public class Xpbd
     private XpbdMesh _toSimulate;
     public float TimeStepLength = 1f / 200;
     public float Dampening;
+    public bool handleCollisions;
+    public SphereCollisions SphereCollisions;
 
     public float3[] ParticlePositions;
     public float3[] oldPositions;
@@ -19,6 +23,7 @@ public class Xpbd
     private ColorGroupXpbdSolver _colorGroupXpbdSolver;
     private SerialParticleSolver _serialParticleSolver;
     private ISoftBodySolver _solver;
+    private bool _isWarm;
 
     public enum Solver
     {
@@ -58,9 +63,28 @@ public class Xpbd
 
     public void Simulate(int subSteps)
     {
+        _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
+        if (_isWarm) UpdatePartícles();
+        // if (handleCollisions) SphereCollisions.HashMap.Refresh();
         Integrate();
-        _solver.SolveDistanceConstraints(TimeStepLength, subSteps, ref ParticlePositions);
-        UpdatePartícles();
+
+        _jacobiXpbdSolver.SolveDistanceConstraints(TimeStepLength, subSteps, ref ParticlePositions, handleCollisions);
+        _isWarm = true;
+    }
+
+    public void InputSelfCollisions()
+    {
+        Sphere[] particleSpheres = new Sphere[_toSimulate.Particles.Length];
+        for (int i = 0; i < ParticlePositions.Length; i++)
+        {
+            particleSpheres[i] = new Sphere
+            {
+                Position = _toSimulate.transform.TransformPoint(ParticlePositions[i]),
+                Radius = 0.01f
+            };
+        }
+
+        SphereCollisions.EnterSpheres(particleSpheres, _toSimulate);
     }
 
     private void Integrate()
@@ -68,7 +92,7 @@ public class Xpbd
         NativeArray<Particle> nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
         NativeArray<float3> nativePredictedPositions =
             new NativeArray<float3>(ParticlePositions.Length, Allocator.TempJob);
-       
+
         IntegrateJob integrationJob = new IntegrateJob()
         {
             Dampening = Dampening,

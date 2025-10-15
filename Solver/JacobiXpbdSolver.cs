@@ -1,7 +1,10 @@
-﻿using System.Numerics;
+﻿using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
+using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Mathematics;
 
 namespace Parallel_XPBD
@@ -12,6 +15,19 @@ namespace Parallel_XPBD
         public float[] Lambdas;
         private XpbdMesh _toSimulate;
 
+
+        private NativeArray<Particle> _nativeParticles;
+        private NativeArray<DistanceConstraint> _nativeDistances;
+        private NativeArray<float> _nativeLambdas;
+        private NativeArray<float> _erorrs;
+        private NativeArray<float3> _nativePredictedPositions;
+        private NativeArray<float3> _deltaResultOne;
+        private NativeArray<float3> _deltaResultTwo;
+        private NativeArray<int> _partToConst;
+        
+        private JobHandle _handle;
+        private bool _isRunning;
+
         public JacobiXpbdSolver(XpbdMesh xpbdMesh)
         {
             _toSimulate = xpbdMesh;
@@ -19,85 +35,86 @@ namespace Parallel_XPBD
             Lambdas = new float[_toSimulate.Distances.Length];
         }
 
-        public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions)
+        public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
+            bool solveCollisions)
         {
             float subStepLength = timeStepLength / subSteps;
-            NativeArray<Particle> nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
-            NativeArray<DistanceConstraint> nativeDistances =
-                new NativeArray<DistanceConstraint>(_toSimulate.Distances, Allocator.TempJob);
-            NativeArray<float> nativeLambdas = new NativeArray<float>(Lambdas, Allocator.TempJob);
-            NativeArray<float3> nativePredictedPositions =
-                new NativeArray<float3>(predictedPositions, Allocator.TempJob);
+            _nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
+            _nativeDistances = new NativeArray<DistanceConstraint>(_toSimulate.Distances, Allocator.TempJob);
+            _nativeLambdas = new NativeArray<float>(Lambdas, Allocator.TempJob);
+            _nativePredictedPositions = new NativeArray<float3>(predictedPositions, Allocator.TempJob);
 
-            NativeArray<float3> deltaResultOne =
-                new NativeArray<float3>(nativeDistances.Length, Allocator.TempJob);
-            NativeArray<float3> deltaResultTwo =
-                new NativeArray<float3>(nativeDistances.Length, Allocator.TempJob);
+            _deltaResultOne =
+                new NativeArray<float3>(_nativeDistances.Length, Allocator.TempJob);
+            _deltaResultTwo =
+                new NativeArray<float3>(_nativeDistances.Length, Allocator.TempJob);
 
-            NativeArray<int> partToConst = new NativeArray<int>(_toSimulate.ParticleToConst, Allocator.TempJob);
-            NativeArray<float> erorrs = new NativeArray<float>(_toSimulate.Distances.Length, Allocator.TempJob);
+            _partToConst = new NativeArray<int>(_toSimulate.ParticleToConst, Allocator.TempJob);
+            _erorrs = new NativeArray<float>(_toSimulate.Distances.Length, Allocator.TempJob);
 
-            JobHandle[] jobHandleConst = new JobHandle[subSteps];
-            JobHandle[] jobHandleJacobi = new JobHandle[subSteps];
+            List<JobHandle> prevJobs = new List<JobHandle>();
 
             for (int i = 0; i < subSteps; i++)
             {
                 SolveConstraintsJob job = new SolveConstraintsJob()
                 {
-                    Particles = nativeParticles,
-                    Distances = nativeDistances,
-                    Lambdas = nativeLambdas,
-                    PredictedPositions = nativePredictedPositions,
+                    Particles = _nativeParticles,
+                    Distances = _nativeDistances,
+                    Lambdas = _nativeLambdas,
+                    PredictedPositions = _nativePredictedPositions,
                     SubStepLength = subStepLength,
-                    DeltaResOne = deltaResultOne,
-                    DeltaResTwo = deltaResultTwo,
+                    DeltaResOne = _deltaResultOne,
+                    DeltaResTwo = _deltaResultTwo,
                 };
-                if (i == 0)
-                {
-                    jobHandleConst[i] = job.Schedule(nativeDistances.Length, 32);
-                }
-                else
-                {
-                    jobHandleConst[i] = job.Schedule(nativeDistances.Length, 32, jobHandleJacobi[i - 1]);
-                }
+                if (i == 0) prevJobs.Add(job.Schedule(_nativeDistances.Length, 32));
+                else prevJobs.Add(job.Schedule(_nativeDistances.Length, 32, prevJobs.Last()));
+
 
                 AddJacobiJob jacobiJobJob = new AddJacobiJob()
                 {
-                    Distances = nativeDistances,
-                    ResOne = deltaResultOne,
-                    ResTwo = deltaResultTwo,
-                    PredictedPositions = nativePredictedPositions,
-                    PartToConst = partToConst
+                    Distances = _nativeDistances,
+                    ResOne = _deltaResultOne,
+                    ResTwo = _deltaResultTwo,
+                    PredictedPositions = _nativePredictedPositions,
+                    PartToConst = _partToConst
                 };
-
-                jobHandleJacobi[i] = jacobiJobJob.Schedule(nativeParticles.Length, 32, jobHandleConst[i]);
-
-                // job.PredictedPositions.CopyFrom(nativePredictedPositions);
+                prevJobs.Add(jacobiJobJob.Schedule(_nativeParticles.Length, 32, prevJobs.Last()));
+                if (solveCollisions)
+                {
+                    prevJobs.Add(
+                        _toSimulate.xpbd.SphereCollisions.HashMap.AccessHashMapParallel(_nativePredictedPositions,
+                            prevJobs.Last()));
+                }
             }
+            _isRunning = true;
+            _handle = prevJobs.Last();
+        }
 
-            jobHandleJacobi[subSteps - 1].Complete();
-            GetErrorJob errorJob = new GetErrorJob()
-            {
-                Particles = nativeParticles,
-                Distances = nativeDistances,
-                PredictedPositions = nativePredictedPositions,
-                Errors = erorrs,
-            };
-            errorJob.Schedule(nativeDistances.Length, 32).Complete();
+        public void FinnishJob(ref float3[] predictedPositions)
+        {
+            if(!_isRunning)return;
+            _handle.Complete();
+            _nativePredictedPositions.CopyTo(predictedPositions);
 
-            nativePredictedPositions.CopyTo(predictedPositions);
+            _nativeParticles.Dispose();
+            _nativeDistances.Dispose();
+            _nativeLambdas.Dispose();
+            _nativePredictedPositions.Dispose();
+            _deltaResultOne.Dispose();
+            _deltaResultTwo.Dispose();
+            _partToConst.Dispose();
+            _erorrs.Dispose();
 
-            nativeParticles.Dispose();
-            nativeDistances.Dispose();
-            nativeLambdas.Dispose();
-            nativePredictedPositions.Dispose();
-            deltaResultOne.Dispose();
-            deltaResultTwo.Dispose();
-            partToConst.Dispose();
-            erorrs.Dispose();
+        }
+
+        public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions)
+        {
+            SolveDistanceConstraints(timeStepLength, subSteps, ref predictedPositions, _toSimulate.handleCollisions);
+            FinnishJob(ref predictedPositions);
         }
     }
-    
+
+
     [BurstCompile]
     public struct SolveConstraintsJob : IJobParallelFor
     {
@@ -108,7 +125,7 @@ namespace Parallel_XPBD
         public NativeArray<float3> DeltaResOne;
         public NativeArray<float3> DeltaResTwo;
         public NativeArray<float> Lambdas;
-        
+
         public float SubStepLength;
 
         public void Execute(int index)
@@ -123,7 +140,7 @@ namespace Parallel_XPBD
             float invMassOne = Particles[constraint.ParticleA].InvMass;
             float invMassTwo = Particles[constraint.ParticleB].InvMass;
             float massSum = invMassOne + invMassTwo;
-            
+
             float denom = massSum + alpha;
             float dlambda = (-distError - alpha * Lambdas[index]) / denom;
 
@@ -132,7 +149,9 @@ namespace Parallel_XPBD
 
             Lambdas[index] += dlambda;
         }
+
     }
+
     [BurstCompile]
     public struct GetErrorJob : IJobParallelFor
     {

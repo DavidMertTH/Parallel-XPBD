@@ -1,7 +1,10 @@
+using System;
 using System.Collections.Generic;
 using Parallel_XPBD;
+using Parallel_XPBD.Collisions;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
 
 public class XpbdMesh : MonoBehaviour
@@ -16,7 +19,7 @@ public class XpbdMesh : MonoBehaviour
     public SpatialHashMap HashMapSpheres;
     public SpatialHashMap HashMapSelf;
     public Display debugUi;
-    public bool handleSelfCollision;
+    public bool handleCollisions;
 
     [Range(1, 200)] public int subSteps = 50;
     [Range(0f, 1f)] public float dampening = 0.05f;
@@ -42,16 +45,21 @@ public class XpbdMesh : MonoBehaviour
         HashMapSelf = new SpatialHashMap();
     }
 
-    private void Update()
+    private void LateUpdate()
     {
         if (reset)
         {
             Reset();
         }
 
-        Particles[0].Position = transform.position;
         xpbd.Simulate(subSteps);
         UpdateMesh();
+    }
+
+    private void OnValidate()
+    {
+        if (xpbd == null) return;
+        xpbd.handleCollisions = handleCollisions;
     }
 
     private void Reset()
@@ -63,6 +71,8 @@ public class XpbdMesh : MonoBehaviour
         SetupMesh();
         reset = false;
         xpbd.SetSolver(solver);
+        transform.localScale = Vector3.one / xSize * 10;
+        xpbd.handleCollisions = handleCollisions;
     }
 
     private void SetupMesh()

@@ -19,6 +19,7 @@ public class GrabInteraction : MonoBehaviour
     private void Update()
     {
         ListenForInputs();
+     
     }
 
     private void ListenForInputs()
@@ -30,13 +31,13 @@ public class GrabInteraction : MonoBehaviour
 
         if (Input.GetMouseButtonDown(0) && !_mouseIsDown)
         {
-            _collider.sharedMesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
+            _collider.sharedMesh = GetComponent<MeshFilter>().sharedMesh;
             _collider.sharedMesh.RecalculateBounds();
-
+            
             _mouseIsDown = true;
             Camera cam = Camera.main;
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
-            _rayDir = ray.direction; // Das ist die richtige Welt-Richtung des Strahls
+            _rayDir = ray.direction;
 
             if (RaycastNearestVertex(
                     meshCol: _collider,
@@ -45,7 +46,7 @@ public class GrabInteraction : MonoBehaviour
                     out Vector3 nearestVtx,
                     out int idx,
                     maxDistance: 1000f,
-                    exactSearch: false)) // auf true stellen für exakte Suche
+                    exactSearch: false))
             {
                 _currentVertexToMove = idx;
                 originalInvMass = _xpbdMesh.Particles[idx].InvMass;
@@ -62,6 +63,7 @@ public class GrabInteraction : MonoBehaviour
             {
                 _xpbdMesh.Particles[_currentVertexToMove].InvMass = originalInvMass;
             }
+
             _mouseIsDown = false;
             _currentVertexToMove = -1;
         }
@@ -84,7 +86,8 @@ public class GrabInteraction : MonoBehaviour
         Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
         Vector3 localStart = _xpbdMesh.Particles[_currentVertexToMove].Position;
         Vector3 startingPoint = _xpbdMesh.gameObject.transform.TransformPoint(localStart);
-        Vector3 endPoint = _xpbdMesh.gameObject.transform.InverseTransformPoint(ProjectPointOntoRay(startingPoint, ray));
+        Vector3 endPoint =
+            _xpbdMesh.gameObject.transform.InverseTransformPoint(ProjectPointOntoRay(startingPoint, ray));
 
         Debug.DrawLine(startingPoint, endPoint, Color.red);
         _xpbdMesh.Particles[_currentVertexToMove] = new Particle()

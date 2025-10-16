@@ -22,16 +22,43 @@ namespace Parallel_XPBD.Collisions
         public SpatialHashMap()
         {
             _initialized = false;
+            _firstAccessThisFrame = true;
+            Entries = Array.Empty<SpatialHashMapEntry>();
         }
 
         public void Refresh()
         {
             _firstAccessThisFrame = true;
+            
             if (_initialized)
             {
-                _savedPositions.Dispose();
+                // _savedPositions.Dispose();
                 _entries.Dispose();
             }
+        }
+
+        public void OnDestroy()
+        {
+            if (_initialized)
+            {
+                // _savedPositions.Dispose();
+                _entries.Dispose();
+            }
+        }
+
+        public void EnterSpheres(Sphere[] spheres, XpbdMesh toSimulate, float gridSize)
+        {
+            Sphere[] localSpaceSpheres = new Sphere[spheres.Length];
+            for (int i = 0; i < spheres.Length; i++)
+            {
+                localSpaceSpheres[i] = new Sphere()
+                {
+                    Position = toSimulate.transform.InverseTransformPoint(spheres[i].Position),
+                    Radius = spheres[i].Radius / toSimulate.transform.localScale.x,
+                };
+            }
+
+            SaveGridPositionsParallel(localSpaceSpheres, gridSize / toSimulate.transform.localScale.x);
         }
 
         public JobHandle AccessHashMapParallel(NativeArray<float3> positions, JobHandle previousJob)
@@ -51,13 +78,6 @@ namespace Parallel_XPBD.Collisions
                 HashMap = _entries,
                 GridSize = this.GridSize
             };
-            // JobHandle jobHandle = accessJob.Schedule(positions.Length, 32, previousJob);
-            //
-            // SolveCollisionConflicts solverJob = new SolveCollisionConflicts()
-            // {
-            //     Displacements = _savedPositions,
-            //     Positions = positions,
-            // };
 
             return accessJob.Schedule(positions.Length, 32, previousJob);
         }
@@ -125,8 +145,8 @@ namespace Parallel_XPBD.Collisions
             JobHandle sortHandle = sortJob.Schedule(fillHandle);
 
             sortHandle.Complete();
-
             var hashArray = myList.AsArray();
+
             Entries = new SpatialHashMapEntry[hashArray.Length];
             hashArray.CopyTo(Entries);
             myList.Dispose();
@@ -229,7 +249,7 @@ namespace Parallel_XPBD.Collisions
                 }
 
                 ResultingDirection[index] = result;
-                AccessPoints[index] += result * 1.1f;
+                AccessPoints[index] += result;
             }
         }
 

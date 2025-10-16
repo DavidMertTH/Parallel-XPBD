@@ -4,7 +4,6 @@ using Parallel_XPBD;
 using Parallel_XPBD.Collisions;
 using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
 
 public class XpbdMesh : MonoBehaviour
@@ -20,6 +19,7 @@ public class XpbdMesh : MonoBehaviour
     public SpatialHashMap HashMapSelf;
     public Display debugUi;
     public bool handleCollisions;
+    public bool handleSelfCollisions;
 
     [Range(1, 200)] public int subSteps = 50;
     [Range(0f, 1f)] public float dampening = 0.05f;
@@ -31,7 +31,7 @@ public class XpbdMesh : MonoBehaviour
 
     public Particle[] Particles;
     public DistanceConstraint[] Distances;
-
+    public event Action Destroyed;
     [HideInInspector] public int[] ParticleToConst;
 
     private Mesh _mesh;
@@ -40,7 +40,7 @@ public class XpbdMesh : MonoBehaviour
 
     void Awake()
     {
-        Reset();
+        Reset(false);
         HashMapSpheres = new SpatialHashMap();
         HashMapSelf = new SpatialHashMap();
     }
@@ -49,7 +49,7 @@ public class XpbdMesh : MonoBehaviour
     {
         if (reset)
         {
-            Reset();
+            Reset(true);
         }
 
         xpbd.Simulate(subSteps);
@@ -59,20 +59,26 @@ public class XpbdMesh : MonoBehaviour
     private void OnValidate()
     {
         if (xpbd == null) return;
-        xpbd.handleCollisions = handleCollisions;
     }
 
-    private void Reset()
+    private void Reset(bool stopOld)
     {
         CreateParticles();
+        if (stopOld) xpbd.DisposeEverything();
         xpbd = new Xpbd(this);
+        xpbd.handleCollisions = handleCollisions;
         xpbd.Dampening = dampening;
         xpbd.TimeStepLength = this.timeStep;
+        xpbd.handleSelfCollisions = handleSelfCollisions;
         SetupMesh();
         reset = false;
         xpbd.SetSolver(solver);
         transform.localScale = Vector3.one / xSize * 10;
-        xpbd.handleCollisions = handleCollisions;
+    }
+
+    private void OnDestroy()
+    {
+        Destroyed?.Invoke();
     }
 
     private void SetupMesh()

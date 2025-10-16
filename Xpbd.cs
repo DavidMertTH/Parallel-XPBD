@@ -1,4 +1,7 @@
-﻿using Parallel_XPBD;
+﻿using System;
+using DefaultNamespace;
+using myXpbd.Parallel_XPBD.Collisions;
+using Parallel_XPBD;
 using Parallel_XPBD.Collisions;
 using Unity.Burst;
 using Unity.Collections;
@@ -13,8 +16,9 @@ public class Xpbd
     public float TimeStepLength = 1f / 200;
     public float Dampening;
     public bool handleCollisions;
-    public SphereCollisions SphereCollisions;
+    public bool handleSelfCollisions;
 
+    public float SimulationTime;
     public float3[] ParticlePositions;
     public float3[] oldPositions;
 
@@ -24,6 +28,10 @@ public class Xpbd
     private SerialParticleSolver _serialParticleSolver;
     private ISoftBodySolver _solver;
     private bool _isWarm;
+    public TimeLogger TimeLogger;
+    public event Action SimulationIsFinnished;
+    public SpatialHashMap SpatialHashMap;
+    private SelfCollisions _selfCollisions;
 
     public enum Solver
     {
@@ -40,6 +48,17 @@ public class Xpbd
         _serialXpbdSolver = new SerialXpbdSolver(_toSimulate);
         _jacobiXpbdSolver = new JacobiXpbdSolver(_toSimulate);
         _colorGroupXpbdSolver = new ColorGroupXpbdSolver(_toSimulate);
+        TimeLogger = new TimeLogger();
+        SpatialHashMap = new SpatialHashMap();
+        if (_toSimulate.handleCollisions) SimulationIsFinnished += SpatialHashMap.Refresh;
+        toSimulate.Destroyed += SpatialHashMap.OnDestroy;
+        _selfCollisions = new SelfCollisions();
+    }
+
+    public void DisposeEverything()
+    {
+        _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
+        SpatialHashMap.OnDestroy();
     }
 
     public void SetSolver(Solver solver)
@@ -64,10 +83,10 @@ public class Xpbd
     public void Simulate(int subSteps)
     {
         _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
+        if (handleSelfCollisions) ParticlePositions = _selfCollisions.HandleSelfCollisions(ParticlePositions);
         if (_isWarm) UpdatePartícles();
-        // if (handleCollisions) SphereCollisions.HashMap.Refresh();
+        SimulationIsFinnished?.Invoke();
         Integrate();
-
         _jacobiXpbdSolver.SolveDistanceConstraints(TimeStepLength, subSteps, ref ParticlePositions, handleCollisions);
         _isWarm = true;
     }
@@ -84,7 +103,7 @@ public class Xpbd
             };
         }
 
-        SphereCollisions.EnterSpheres(particleSpheres, _toSimulate);
+        // SpatialHashMap.EnterSpheres(particleSpheres, _toSimulate);
     }
 
     private void Integrate()

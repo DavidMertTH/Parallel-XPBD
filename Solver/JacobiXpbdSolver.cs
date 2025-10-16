@@ -6,6 +6,7 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Mathematics;
+using Unity.VisualScripting;
 
 namespace Parallel_XPBD
 {
@@ -24,7 +25,7 @@ namespace Parallel_XPBD
         private NativeArray<float3> _deltaResultOne;
         private NativeArray<float3> _deltaResultTwo;
         private NativeArray<int> _partToConst;
-        
+
         private JobHandle _handle;
         private bool _isRunning;
 
@@ -33,11 +34,14 @@ namespace Parallel_XPBD
             _toSimulate = xpbdMesh;
             Gradients = new float3[_toSimulate.Distances.Length];
             Lambdas = new float[_toSimulate.Distances.Length];
+            _toSimulate.Destroyed += OnDestroy;
         }
 
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
             bool solveCollisions)
         {
+            int collisionStepsPerSubsteps = 5;
+            _toSimulate.xpbd.TimeLogger.StartSimClockwatch();
             float subStepLength = timeStepLength / subSteps;
             _nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
             _nativeDistances = new NativeArray<DistanceConstraint>(_toSimulate.Distances, Allocator.TempJob);
@@ -81,20 +85,26 @@ namespace Parallel_XPBD
                 prevJobs.Add(jacobiJobJob.Schedule(_nativeParticles.Length, 32, prevJobs.Last()));
                 if (solveCollisions)
                 {
-                    prevJobs.Add(
-                        _toSimulate.xpbd.SphereCollisions.HashMap.AccessHashMapParallel(_nativePredictedPositions,
-                            prevJobs.Last()));
+                    if (i % collisionStepsPerSubsteps == 0)
+                    {
+                        prevJobs.Add(
+                            _toSimulate.xpbd.SpatialHashMap.AccessHashMapParallel(_nativePredictedPositions,
+                                prevJobs.Last()));
+                    }
                 }
             }
+
             _isRunning = true;
             _handle = prevJobs.Last();
         }
 
         public void FinnishJob(ref float3[] predictedPositions)
         {
-            if(!_isRunning)return;
+            if (!_isRunning) return;
+            bool isDone = _handle.IsCompleted;
             _handle.Complete();
-            _nativePredictedPositions.CopyTo(predictedPositions);
+            _toSimulate.xpbd.TimeLogger.StopSimClockwatch(!isDone);
+            if (predictedPositions != null) _nativePredictedPositions.CopyTo(predictedPositions);
 
             _nativeParticles.Dispose();
             _nativeDistances.Dispose();
@@ -104,7 +114,11 @@ namespace Parallel_XPBD
             _deltaResultTwo.Dispose();
             _partToConst.Dispose();
             _erorrs.Dispose();
+        }
 
+        public void OnDestroy()
+        {
+            FinnishJob(ref _toSimulate.xpbd.ParticlePositions);
         }
 
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions)
@@ -149,7 +163,6 @@ namespace Parallel_XPBD
 
             Lambdas[index] += dlambda;
         }
-
     }
 
     [BurstCompile]

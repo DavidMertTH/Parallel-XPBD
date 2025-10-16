@@ -331,7 +331,7 @@ public class XpbdMesh : MonoBehaviour
         {
             for (int y = 0; y < ySize; y++)
             {
-                positions[y * xSize + x] = origin + new Vector3(x, -y, Random.Range(0f, 0.001f));
+                positions[y * xSize + x] = origin + new Vector3(x, Random.Range(0f, 0.001f), y);
             }
         }
 

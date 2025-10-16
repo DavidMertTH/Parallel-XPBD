@@ -40,7 +40,7 @@ namespace Parallel_XPBD
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
             bool solveCollisions)
         {
-            int collisionStepsPerSubsteps = 5;
+            int collisionStepsPerSubsteps = 1;
             _toSimulate.xpbd.TimeLogger.StartSimClockwatch();
             float subStepLength = timeStepLength / subSteps;
             _nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);

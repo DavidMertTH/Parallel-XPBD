@@ -40,7 +40,7 @@ namespace Parallel_XPBD
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
             bool solveCollisions)
         {
-            int collisionStepsPerSubsteps = 1;
+            int collisionStepsPerSubsteps = 5;
             _toSimulate.xpbd.TimeLogger.StartSimClockwatch();
             float subStepLength = timeStepLength / subSteps;
             _nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
@@ -102,10 +102,12 @@ namespace Parallel_XPBD
         {
             if (!_isRunning) return;
             bool isDone = _handle.IsCompleted;
-            _handle.Complete();
-            _toSimulate.xpbd.TimeLogger.StopSimClockwatch(!isDone);
-            if (predictedPositions != null) _nativePredictedPositions.CopyTo(predictedPositions);
 
+            _handle.Complete();
+            if (predictedPositions != null) _nativePredictedPositions.CopyTo(predictedPositions);
+            _toSimulate.xpbd.TimeLogger.StopSimClockwatch(!isDone);
+            
+            _toSimulate.xpbd.SpatialHashMap.DisposeHashMap();
             _nativeParticles.Dispose();
             _nativeDistances.Dispose();
             _nativeLambdas.Dispose();

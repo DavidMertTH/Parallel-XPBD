@@ -16,6 +16,6 @@ public class InteractionSphere : MonoBehaviour
     {
         _sphere.Radius = 1.01f * (transform.localScale.x / 2);
         _sphere.Position = transform.position;
-        if (xpbdMesh.handleCollisions) xpbdMesh.xpbd.SpatialHashMap.EnterSpheres(new Sphere[] { _sphere }, xpbdMesh, 2);
+        // if (xpbdMesh.handleCollisions) xpbdMesh.xpbd.SpatialHashMap.EnterSpheres(new Sphere[] { _sphere }, xpbdMesh, 2);
     }
 }

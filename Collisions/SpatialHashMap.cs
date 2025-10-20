@@ -14,100 +14,92 @@ namespace Parallel_XPBD.Collisions
     {
         public SpatialHashMapEntry[] Entries;
         public float GridSize;
-        private NativeArray<float3> _savedPositions;
-        private NativeArray<SpatialHashMapEntry> _entries;
-        private bool _firstAccessThisFrame;
-        private bool _initialized;
+        private bool _hashMapIsInitialized;
+        private NativeArray<SpatialHashMapEntry> _hashMap;
 
         public SpatialHashMap()
         {
-            _initialized = false;
-            _firstAccessThisFrame = true;
             Entries = Array.Empty<SpatialHashMapEntry>();
         }
 
-        public void Refresh()
+        public void DisposeHashMap()
         {
-            _firstAccessThisFrame = true;
-            
-            if (_initialized)
+            if (_hashMapIsInitialized)
             {
-                // _savedPositions.Dispose();
-                _entries.Dispose();
+                _hashMapIsInitialized = false;
+                _hashMap.Dispose();
             }
         }
 
-        public void OnDestroy()
+
+        [BurstCompile]
+        private struct ToLocalJob : IJobFor
         {
-            if (_initialized)
+            [ReadOnly] public NativeArray<Sphere> InSpheres;
+            public NativeArray<Sphere> OutSpheres;
+
+            public float4x4 WorldToLocal; // toSimulate.transform.worldToLocalMatrix
+            public float InvScaleX; // 1f / toSimulate.transform.localScale.x
+
+            public void Execute(int i)
             {
-                // _savedPositions.Dispose();
-                _entries.Dispose();
+                var s = InSpheres[i];
+
+                float4 p4 = math.mul(WorldToLocal, new float4(s.Position, 1f));
+                float3 p = p4.xyz;
+
+                float r = s.Radius * InvScaleX;
+
+                OutSpheres[i] = new Sphere { Position = p, Radius = r };
             }
         }
-
-        public void EnterSpheres(Sphere[] spheres, XpbdMesh toSimulate, float gridSize)
+        
+        public void EnterSpheres(NativeArray<Sphere> spheresWorld, XpbdMesh toSimulate, float gridSize)
         {
-            Sphere[] localSpaceSpheres = new Sphere[spheres.Length];
-            for (int i = 0; i < spheres.Length; i++)
-            {
-                localSpaceSpheres[i] = new Sphere()
-                {
-                    Position = toSimulate.transform.InverseTransformPoint(spheres[i].Position),
-                    Radius = spheres[i].Radius / toSimulate.transform.localScale.x,
-                };
-            }
+            int count = spheresWorld.Length;
+            if (count == 0) return;
 
-            SaveGridPositionsParallel(localSpaceSpheres, gridSize / toSimulate.transform.localScale.x);
+            var tr = toSimulate.transform;
+            float4x4 worldToLocal = tr.worldToLocalMatrix;
+            float invScaleX = 1f / tr.localScale.x;
+            NativeArray<Sphere> spheresOut = new NativeArray<Sphere>(spheresWorld, Allocator.TempJob);
+            var job = new ToLocalJob
+            {
+                InSpheres = spheresWorld,
+                OutSpheres = spheresOut,
+                WorldToLocal = worldToLocal,
+                InvScaleX = invScaleX
+            };
+
+            job.ScheduleParallel(count, 64, default).Complete();
+
+            float gridSizeLocal = gridSize * invScaleX;
+
+            SaveGridPositionsParallel(spheresOut, gridSizeLocal);
         }
 
         public JobHandle AccessHashMapParallel(NativeArray<float3> positions, JobHandle previousJob)
         {
-            if (_firstAccessThisFrame)
+            if (!_hashMapIsInitialized)
             {
-                _savedPositions = new NativeArray<float3>(positions.Length, Allocator.TempJob);
-                _entries = new NativeArray<SpatialHashMapEntry>(Entries, Allocator.TempJob);
-                _firstAccessThisFrame = false;
-                _initialized = true;
+                _hashMap = new NativeArray<SpatialHashMapEntry>(Entries, Allocator.TempJob);
+                _hashMapIsInitialized = true;
             }
 
             AccessHashMap accessJob = new AccessHashMap()
             {
-                ResultingDirection = _savedPositions,
                 AccessPoints = positions,
-                HashMap = _entries,
+                HashMap = _hashMap,
                 GridSize = this.GridSize
             };
-
             return accessJob.Schedule(positions.Length, 32, previousJob);
         }
 
-        // public float3[] AccessHashMapParallel(float3[] points)
-        // {
-        //     NativeArray<float3> results = new NativeArray<float3>(points.Length, Allocator.TempJob);
-        //     NativeArray<float3> accessPoints = new NativeArray<float3>(points, Allocator.TempJob);
-        //     NativeArray<SpatialHashMapEntry> hashMap = new NativeArray<SpatialHashMapEntry>(Entries, Allocator.TempJob);
-        //
-        //     AccessHashMap accessJob = new AccessHashMap()
-        //     {
-        //         ResultingDirection = results,
-        //         AccessPoints = accessPoints,
-        //         HashMap = hashMap,
-        //         GridSize = this.GridSize
-        //     };
-        //     accessJob.Schedule(accessPoints.Length, 32).Complete();
-        //
-        //
-        //     float3[] resultingDirections = new float3[results.Length];
-        //     accessJob.ResultingDirection.CopyTo(resultingDirections);
-        //     results.Dispose();
-        //     accessPoints.Dispose();
-        //     return resultingDirections;
-        // }
 
         public void SaveGridPositionsParallel(Particle[] particles, float gridSize, Transform transformobj)
         {
             List<Sphere> spheresToInsert = new List<Sphere>();
+
             for (int i = 0; i < particles.Length; i++)
             {
                 spheresToInsert.Add(new Sphere()
@@ -122,20 +114,23 @@ namespace Parallel_XPBD.Collisions
 
         public void SaveGridPositionsParallel(Sphere[] spheres, float gridSize)
         {
-            GridSize = gridSize;
+            NativeArray<Sphere> nativeSpheres = new NativeArray<Sphere>(spheres, Allocator.TempJob);
+            SaveGridPositionsParallel(nativeSpheres, gridSize);
+        }
 
-            var spheresNative = new NativeArray<Sphere>(spheres.ToArray(), Allocator.TempJob);
-            int estimatedEntries = spheresNative.Length;
+        public void SaveGridPositionsParallel(NativeArray<Sphere> spheres, float gridSize)
+        {
+            GridSize = gridSize;
             var myList = new NativeList<SpatialHashMapEntry>(50000, Allocator.TempJob);
 
             var fillJob = new FillHashMap
             {
                 Result = myList.AsParallelWriter(),
                 GridSize = gridSize,
-                Spheres = spheresNative
+                Spheres = spheres
             };
 
-            JobHandle fillHandle = fillJob.Schedule(spheresNative.Length, 64);
+            JobHandle fillHandle = fillJob.Schedule(spheres.Length, 64);
 
             var sortJob = new SortJob
             {
@@ -150,7 +145,7 @@ namespace Parallel_XPBD.Collisions
             Entries = new SpatialHashMapEntry[hashArray.Length];
             hashArray.CopyTo(Entries);
             myList.Dispose();
-            spheresNative.Dispose();
+            spheres.Dispose();
         }
 
 
@@ -179,7 +174,6 @@ namespace Parallel_XPBD.Collisions
         [BurstCompile]
         private struct AccessHashMap : IJobParallelFor
         {
-            public NativeArray<float3> ResultingDirection;
             public NativeArray<float3> AccessPoints;
             [ReadOnly] public NativeArray<SpatialHashMapEntry> HashMap;
             [ReadOnly] public float GridSize;
@@ -248,7 +242,6 @@ namespace Parallel_XPBD.Collisions
                     result = direction * (HashMap[i].Target.Radius - distance);
                 }
 
-                ResultingDirection[index] = result;
                 AccessPoints[index] += result;
             }
         }

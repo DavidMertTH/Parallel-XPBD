@@ -50,15 +50,12 @@ public class Xpbd
         _colorGroupXpbdSolver = new ColorGroupXpbdSolver(_toSimulate);
         TimeLogger = new TimeLogger();
         SpatialHashMap = new SpatialHashMap();
-        if (_toSimulate.handleCollisions) SimulationIsFinnished += SpatialHashMap.Refresh;
-        toSimulate.Destroyed += SpatialHashMap.OnDestroy;
         _selfCollisions = new SelfCollisions();
     }
 
     public void DisposeEverything()
     {
         _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
-        SpatialHashMap.OnDestroy();
     }
 
     public void SetSolver(Solver solver)

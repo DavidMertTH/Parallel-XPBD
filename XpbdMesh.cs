@@ -73,7 +73,7 @@ public class XpbdMesh : MonoBehaviour
         SetupMesh();
         reset = false;
         xpbd.SetSolver(solver);
-        transform.localScale = Vector3.one / xSize * 10;
+        transform.localScale = Vector3.one / xSize * 30;
     }
 
     private void OnDestroy()

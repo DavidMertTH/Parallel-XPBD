@@ -1,143 +1,200 @@
 using System;
 using Parallel_XPBD.Collisions;
-using Unity.Mathematics;
-using UnityEngine;
-using UnityEngine.Jobs;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
-using Unity.Burst;
+using Unity.Mathematics;
+using UnityEngine;
 using Random = UnityEngine.Random;
 
-public class SphereGroupBurst : MonoBehaviour
+public class SphereGroupBurst_DataOnly : MonoBehaviour
 {
-    private GameObject[] _sphereObjects;
-    public int count;
-    // Native Speicher
-    private TransformAccessArray _taa;
-    private NativeArray<Sphere> _spheresNative;
-    private NativeArray<float3> _startPositionsNative;
-    private NativeArray<float> _randomPerSphereNative;
+    [Header("Control")]
+    [Min(0)]
+    [Tooltip("Wie viele Spheres aktiv sein sollen (live im Play Mode änderbar).")]
+    public int activeSpheres = 20;
 
-    // Falls EnterSpheres (noch) kein NativeArray akzeptiert:
-    private Sphere[] _spheresManagedCache;
+    [Header("Spawn Settings")]
+    [Tooltip("X- & Y-Range der Startpositionen.\nX: [0, rangeX]\nY: [-10, -10+rangeY]\nZ initial -3.")]
+    public float rangeX = 25f;
+    public float rangeY = 25f;
+    [Tooltip("Amplitude der Z-Sinusbewegung.")]
+    public float zAmplitude = 4f;
+    [Tooltip("Min/Max Start-Radius (vor kRadMul).")]
+    public Vector2 radiusRange = new Vector2(1f, 2f);
+    [Tooltip("Optionaler Seed für reproduzierbare Starts. <0 = kein Seed.")]
+    public int randomSeed = -1;
 
+    [Header("XPBD Target")]
     public XpbdMesh _toSimulate;
 
+    // Native Daten (reine Daten, keine Transforms)
+    private NativeArray<Sphere> _spheresNative;       // Ausgabe an dein System
+    private NativeArray<float3> _startPositions;      // Startpositionen
+    private NativeArray<float>  _phasePerSphere;      // Zufallsphasen für den Sinus
+    private NativeArray<float>  _radiusPerSphere;     // Basisradius pro Sphere
+
+    private const float kRadMul = 0.55f; // analog zu vorher (1.1f * 0.5f)
+
     [BurstCompile]
-    private struct MoveAndFillJob : IJobParallelForTransform
+    private struct MoveAndFillJob : IJobParallelFor
     {
-        public NativeArray<Sphere> Spheres;              // out
-        [ReadOnly] public NativeArray<float3> Starts;    // in
-        [ReadOnly] public NativeArray<float> Randoms;    // in
+        public NativeArray<Sphere> Spheres;            // out
+        [ReadOnly] public NativeArray<float3> Starts;  // in
+        [ReadOnly] public NativeArray<float> Phases;   // in
+        [ReadOnly] public NativeArray<float> Radii;    // in
 
-        public float TimeNow;     // Time.time
-        public float Amp;         // 4.0f
-        private const float kRadMul = 0.55f; // 1.1f * 0.5f
+        public float TimeNow;   // Time.time
+        public float Amp;       // zAmplitude
 
-        public void Execute(int index, TransformAccess transform)
+        public void Execute(int index)
         {
-            // Bewegung (z-Achse)
-            float offset = math.sin(TimeNow + Randoms[index]);
-            float3 targetPos = Starts[index] + new float3(0f, 0f, offset * Amp);
-            transform.position = targetPos;
+            float offset = math.sin(TimeNow + Phases[index]);
+            float3 pos = Starts[index] + new float3(0f, 0f, offset * Amp);
 
-            // Radius aus localScale.x berechnen
-            float radius = kRadMul * transform.localScale.x;
-
-            // Parallel das Kollisionsobjekt befüllen
             Spheres[index] = new Sphere
             {
-                Position = targetPos,
-                Radius = radius
+                Position = pos,
+                Radius   = Radii[index] * kRadMul
             };
         }
     }
-    
+
+    // ---------- Lifecycle ----------
     private void OnEnable()
     {
-        _sphereObjects = new GameObject[count];
-        var startsManaged = new Vector3[count];
-        var randomManaged = new float[count];
-
-        for (int i = 0; i < count; i++)
-        {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            go.transform.parent = transform;
-
-            go.transform.position = new Vector3(Random.value * 25f, -10f + Random.value * 25f, -3f);
-            float radius = 1f + Random.value;
-            go.transform.localScale = new Vector3(radius, radius, radius);
-
-            _sphereObjects[i]   = go;
-            startsManaged[i]    = go.transform.position;
-            randomManaged[i]    = Random.value * 10f;
-        }
-
-        // Persistent native Speicher vorbereiten
-        _taa = new TransformAccessArray(Array.ConvertAll(_sphereObjects, s => s.transform));
-        _spheresNative          = new NativeArray<Sphere>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        _startPositionsNative   = new NativeArray<float3>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        _randomPerSphereNative  = new NativeArray<float>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-
-        // Einmalige Kopie der Startwerte
-        for (int i = 0; i < count; i++)
-        {
-            _startPositionsNative[i]  = startsManaged[i];
-            _randomPerSphereNative[i] = randomManaged[i];
-        }
-
-        _spheresManagedCache = new Sphere[count];
+        if (randomSeed >= 0) Random.InitState(randomSeed);
+        AllocateAndInit(activeSpheres, keepExisting: false);
     }
 
     private void OnDisable()
     {
-        if (_taa.isCreated) _taa.Dispose();
-        if (_spheresNative.IsCreated) _spheresNative.Dispose();
-        if (_startPositionsNative.IsCreated) _startPositionsNative.Dispose();
-        if (_randomPerSphereNative.IsCreated) _randomPerSphereNative.Dispose();
+        DisposeNatives();
+    }
+
+    // Live-Änderung im Play Mode
+    private void OnValidate()
+    {
+        if (!Application.isPlaying) return;
+
+        if (radiusRange.x > radiusRange.y)
+            radiusRange = new Vector2(radiusRange.y, radiusRange.x);
+
+        // Wenn sich activeSpheres ändert → Arrays anpassen
+        ResizeActiveCount(activeSpheres);
     }
 
     private void Update()
     {
+        if (!_spheresNative.IsCreated || _spheresNative.Length == 0) return;
+        if (_toSimulate == null || _toSimulate.xpbd == null) return;
+
         var job = new MoveAndFillJob
         {
             Spheres = _spheresNative,
-            Starts  = _startPositionsNative,
-            Randoms = _randomPerSphereNative,
+            Starts  = _startPositions,
+            Phases  = _phasePerSphere,
+            Radii   = _radiusPerSphere,
             TimeNow = Time.time,
-            Amp     = 4f
+            Amp     = zAmplitude
         };
 
         _toSimulate.xpbd.TimeLogger.StartCollisionEntryClockwatch();
-        var handle = job.Schedule(_taa);
-        handle.Complete(); 
-        
-        _toSimulate.xpbd.SpatialHashMap.EnterSpheres(_spheresNative, _toSimulate, 3);
+        var handle = job.Schedule(_spheresNative.Length, 64); // batch size 64
+        handle.Complete();
 
+        // Dein Kollisionssystem erhält direkt das NativeArray mit Spheres
+        _toSimulate.xpbd.SpatialHashMap.EnterSpheres(_spheresNative, _toSimulate, 3);
         _toSimulate.xpbd.TimeLogger.StopCollisionEntryClockwatch();
     }
 
-    public void Rebuild(Transform[] newSphereTransforms)
+    // ---------- Public API ----------
+    /// <summary>Per Code die Anzahl live setzen.</summary>
+    public void SetActiveSpheres(int newCount)
     {
-        // Dispose alt
-        if (_taa.isCreated) _taa.Dispose();
-        if (_spheresNative.IsCreated) _spheresNative.Dispose();
-        if (_startPositionsNative.IsCreated) _startPositionsNative.Dispose();
-        if (_randomPerSphereNative.IsCreated) _randomPerSphereNative.Dispose();
+        newCount = Mathf.Max(0, newCount);
+        activeSpheres = newCount;
+        if (!Application.isPlaying) return;
+        ResizeActiveCount(newCount);
+    }
 
-        // Neu aufsetzen
-        int count = newSphereTransforms?.Length ?? 0;
-        _taa = new TransformAccessArray(newSphereTransforms ?? Array.Empty<Transform>());
-        _spheresNative         = new NativeArray<Sphere>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        _startPositionsNative  = new NativeArray<float3>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        _randomPerSphereNative = new NativeArray<float>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        _spheresManagedCache   = new Sphere[count];
+    // ---------- Internals ----------
+    private void AllocateAndInit(int count, bool keepExisting)
+    {
+        // Alte Arrays ggf. übernehmen
+        NativeArray<float3> oldStarts   = default;
+        NativeArray<float>  oldPhases   = default;
+        NativeArray<float>  oldRadii    = default;
 
-        // Hier ggf. Starts/Randoms neu setzen
-        for (int i = 0; i < count; i++)
+        int oldLen = 0;
+        if (keepExisting && _startPositions.IsCreated && _phasePerSphere.IsCreated && _radiusPerSphere.IsCreated)
         {
-            _startPositionsNative[i]  = newSphereTransforms[i].position;
-            _randomPerSphereNative[i] = UnityEngine.Random.value * 10f;
+            oldLen = math.min(count,
+                     math.min(_startPositions.Length,
+                     math.min(_phasePerSphere.Length, _radiusPerSphere.Length)));
+            if (oldLen > 0)
+            {
+                oldStarts = new NativeArray<float3>(oldLen, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+                oldPhases = new NativeArray<float>(oldLen, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+                oldRadii  = new NativeArray<float>(oldLen, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+                NativeArray<float3>.Copy(_startPositions, oldStarts, oldLen);
+                NativeArray<float>.Copy (_phasePerSphere, oldPhases, oldLen);
+                NativeArray<float>.Copy (_radiusPerSphere, oldRadii,  oldLen);
+            }
         }
+
+        DisposeNatives();
+
+        _spheresNative  = new NativeArray<Sphere>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        _startPositions = new NativeArray<float3>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        _phasePerSphere = new NativeArray<float>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        _radiusPerSphere= new NativeArray<float>(count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+
+        int i = 0;
+
+        // Übernommene Einträge zurückkopieren
+        for (; i < oldLen; i++)
+        {
+            _startPositions[i] = oldStarts[i];
+            _phasePerSphere[i] = oldPhases[i];
+            _radiusPerSphere[i]= oldRadii[i];
+        }
+
+        // Neue Einträge initialisieren
+        for (; i < count; i++)
+        {
+            float3 start = new float3(Random.value * rangeX,
+                                      -10f + Random.value * rangeY,
+                                      -3f);
+            float baseRadius = Mathf.Lerp(radiusRange.x, radiusRange.y, Random.value);
+            float phase = Random.value * 10f;
+
+            _startPositions[i] = start;
+            _phasePerSphere[i] = phase;
+            _radiusPerSphere[i]= baseRadius;
+        }
+
+        // Temp kopien freigeben
+        if (oldStarts.IsCreated) oldStarts.Dispose();
+        if (oldPhases.IsCreated) oldPhases.Dispose();
+        if (oldRadii.IsCreated)  oldRadii.Dispose();
+    }
+
+    private void ResizeActiveCount(int newCount)
+    {
+        newCount = Mathf.Max(0, newCount);
+        int current = _spheresNative.IsCreated ? _spheresNative.Length : 0;
+        if (newCount == current) return;
+
+        // Reallokation, vorhandene Daten (vorn) behalten
+        AllocateAndInit(newCount, keepExisting: true);
+    }
+
+    private void DisposeNatives()
+    {
+        if (_spheresNative.IsCreated)  _spheresNative.Dispose();
+        if (_startPositions.IsCreated) _startPositions.Dispose();
+        if (_phasePerSphere.IsCreated) _phasePerSphere.Dispose();
+        if (_radiusPerSphere.IsCreated) _radiusPerSphere.Dispose();
     }
 }

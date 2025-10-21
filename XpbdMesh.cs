@@ -45,7 +45,7 @@ public class XpbdMesh : MonoBehaviour
         HashMapSelf = new SpatialHashMap();
     }
 
-    private void LateUpdate()
+    private void Update()
     {
         if (reset)
         {

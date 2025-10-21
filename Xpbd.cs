@@ -59,6 +59,7 @@ public class Xpbd
     public void DisposeEverything()
     {
         _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
+        SpatialHashMap.OnDestroy();
     }
 
     public void SetSolver(Solver solver)

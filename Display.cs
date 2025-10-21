@@ -29,7 +29,7 @@ public class Display : MonoBehaviour
         frames++;
         timer += Time.unscaledDeltaTime;
 
-        if (timer <= 0.5f) return;
+        if (timer <= 2f) return;
 
 
         numConstraints = xpbdMesh.Distances.Length;

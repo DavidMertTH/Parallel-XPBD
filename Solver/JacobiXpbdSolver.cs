@@ -41,7 +41,7 @@ namespace Parallel_XPBD
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
             bool solveCollisions)
         {
-            int collisionStepsPerSubsteps = 5;
+            int collisionStepsPerSubsteps = 49;
             _toSimulate.xpbd.TimeLogger.StartSimClockwatch();
             float subStepLength = timeStepLength / subSteps;
             _nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
@@ -89,8 +89,11 @@ namespace Parallel_XPBD
                     if (i % collisionStepsPerSubsteps == 0)
                     {
                         prevJobs.Add(
-                            _toSimulate.xpbd.HashMapEllipsoids.AccessHashMapParallel(_nativePredictedPositions,
+                            _toSimulate.xpbd.SpatialHashMap.AccessHashMapParallel(_nativePredictedPositions,
                                 prevJobs.Last()));
+                        // prevJobs.Add(
+                        // _toSimulate.xpbd.HashMapEllipsoids.AccessHashMapParallel(_nativePredictedPositions,
+                        // prevJobs.Last()));
                     }
                 }
             }

@@ -17,10 +17,14 @@ namespace Parallel_XPBD.Collisions
         public float GridSize;
         private bool _hashMapIsInitialized;
         private NativeArray<SpatialHashMapEntry> _hashMap;
-
+        private JobHandle _fillJobHandle;
+        private NativeList<SpatialHashMapEntry> _entryNativeList;
+        private FillHashMap _fillJob;
+        private bool _fillChainIsRunning;
         public SpatialHashMap()
         {
             Entries = Array.Empty<SpatialHashMapEntry>();
+            _fillChainIsRunning = false;
         }
 
         public void DisposeHashMap()
@@ -32,7 +36,11 @@ namespace Parallel_XPBD.Collisions
             }
         }
 
-
+        public void OnDestroy()
+        {
+            CompleteHashMapFill();
+        }
+        
         [BurstCompile]
         private struct ToLocalJob : IJobFor
         {
@@ -121,34 +129,37 @@ namespace Parallel_XPBD.Collisions
 
         public void SaveGridPositionsParallel(NativeArray<Sphere> spheres, float gridSize)
         {
+            if(_fillChainIsRunning)CompleteHashMapFill();
+            _entryNativeList = new NativeList<SpatialHashMapEntry>(50000, Allocator.TempJob);
+            _fillChainIsRunning = true;
             GridSize = gridSize;
-            var myList = new NativeList<SpatialHashMapEntry>(50000, Allocator.TempJob);
-
-            var fillJob = new FillHashMap
+            _fillJob = new FillHashMap
             {
-                Result = myList.AsParallelWriter(),
+                Result = _entryNativeList.AsParallelWriter(),
                 GridSize = gridSize,
                 Spheres = spheres
             };
 
-            JobHandle fillHandle = fillJob.Schedule(spheres.Length, 64);
+            JobHandle fillHandle = _fillJob.Schedule(spheres.Length, 64);
 
             var sortJob = new SortJob
             {
-                HashMap = myList.AsDeferredJobArray()
+                HashMap = _entryNativeList.AsDeferredJobArray()
             };
 
-            JobHandle sortHandle = sortJob.Schedule(fillHandle);
-
-            sortHandle.Complete();
-            var hashArray = myList.AsArray();
-
-            Entries = new SpatialHashMapEntry[hashArray.Length];
-            hashArray.CopyTo(Entries);
-            myList.Dispose();
-            spheres.Dispose();
+            _fillJobHandle = sortJob.Schedule(fillHandle);
         }
 
+        private void CompleteHashMapFill()
+        {
+            if(!_fillChainIsRunning)return;
+            _fillJobHandle.Complete();
+            NativeArray<SpatialHashMapEntry> hashArray = _entryNativeList.AsArray();
+            Entries = new SpatialHashMapEntry[hashArray.Length];
+            hashArray.CopyTo(Entries);
+            _fillJob.Spheres.Dispose();
+            _entryNativeList.Dispose();
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int Hash3U(int x, int y, int z)

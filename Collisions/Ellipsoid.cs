@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace myXpbd.Parallel_XPBD.Collisions
 {
-    public class Ellipsoid
+    public struct Ellipsoid
     {
         public float3 Position;
         public Quaternion Rotation;

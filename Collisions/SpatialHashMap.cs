@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using myXpbd.Parallel_XPBD.Collisions;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
@@ -38,8 +39,8 @@ namespace Parallel_XPBD.Collisions
             [ReadOnly] public NativeArray<Sphere> InSpheres;
             public NativeArray<Sphere> OutSpheres;
 
-            public float4x4 WorldToLocal; // toSimulate.transform.worldToLocalMatrix
-            public float InvScaleX; // 1f / toSimulate.transform.localScale.x
+            public float4x4 WorldToLocal; 
+            public float InvScaleX; 
 
             public void Execute(int i)
             {
@@ -53,7 +54,7 @@ namespace Parallel_XPBD.Collisions
                 OutSpheres[i] = new Sphere { Position = p, Radius = r };
             }
         }
-        
+
         public void EnterSpheres(NativeArray<Sphere> spheresWorld, XpbdMesh toSimulate, float gridSize)
         {
             int count = spheresWorld.Length;
@@ -157,7 +158,16 @@ namespace Parallel_XPBD.Collisions
                 return (x * 73856093 ^ y * 19349663 ^ z * 83492791);
             }
         }
+        [BurstCompile]
+        private struct SortJob : IJob
+        {
+            public NativeArray<SpatialHashMapEntry> HashMap;
 
+            public void Execute()
+            {
+                HashMap.Sort();
+            }
+        }
 
         [BurstCompile]
         private struct SolveCollisionConflicts : IJobParallelFor
@@ -201,7 +211,6 @@ namespace Parallel_XPBD.Collisions
                 return lo;
             }
 
-            // Erste Position mit arr[pos].Hash > target (exklusives Ende)
             static int UpperBound(NativeArray<SpatialHashMapEntry> arr, int target)
             {
                 int lo = 0;
@@ -246,17 +255,7 @@ namespace Parallel_XPBD.Collisions
             }
         }
 
-        [BurstCompile]
-        private struct SortJob : IJob
-        {
-            public NativeArray<SpatialHashMapEntry> HashMap;
-
-            public void Execute()
-            {
-                HashMap.Sort();
-            }
-        }
-
+       
         [BurstCompile]
         private struct FillHashMap : IJobParallelFor
         {
@@ -322,7 +321,6 @@ namespace Parallel_XPBD.Collisions
                         targetSphere.Position = Spheres[index].Position;
                         targetSphere.Radius = Spheres[index].Radius;
                         entry.Target = targetSphere;
-                        entry.Corner = cellMin;
                         Result.AddNoResize(entry);
                     }
                 }
@@ -330,12 +328,12 @@ namespace Parallel_XPBD.Collisions
         }
     }
 
+   
 
     public struct SpatialHashMapEntry : IComparable<SpatialHashMapEntry>
     {
         public int Hash;
         public Sphere Target;
-        public Vector3 Corner;
 
         public int CompareTo(SpatialHashMapEntry other)
         {

@@ -31,6 +31,8 @@ public class Xpbd
     public TimeLogger TimeLogger;
     public event Action SimulationIsFinnished;
     public SpatialHashMap SpatialHashMap;
+    public EllipsoidSpatialHash HashMapEllipsoids;
+
     private SelfCollisions _selfCollisions;
 
     public enum Solver
@@ -50,6 +52,7 @@ public class Xpbd
         _colorGroupXpbdSolver = new ColorGroupXpbdSolver(_toSimulate);
         TimeLogger = new TimeLogger();
         SpatialHashMap = new SpatialHashMap();
+        HashMapEllipsoids = new EllipsoidSpatialHash();
         _selfCollisions = new SelfCollisions();
     }
 

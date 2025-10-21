@@ -1,20 +1,22 @@
 using System;
 using System.Collections.Generic;
 using myXpbd.Parallel_XPBD.Collisions;
+using Parallel_XPBD.Collisions;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.PlayerLoop;
 
 public class ElipsoidInteraction : MonoBehaviour
 {
     public Ellipsoid Ellipsoid;
     public GameObject probe;
     public EllipsoidSpatialHash HashMap;
+    public XpbdMesh toSimulate;
 
     void Start()
     {
         Ellipsoid = new Ellipsoid();
-        HashMap = new EllipsoidSpatialHash();
     }
 
     void Update()
@@ -25,30 +27,21 @@ public class ElipsoidInteraction : MonoBehaviour
             Rotation = transform.rotation,
             HalfAxis = transform.localScale / 2
         };
+        Ellipsoid[] arr = { Ellipsoid };
+        toSimulate.xpbd.HashMapEllipsoids.SaveGlobalEllipsoidInLocalSpace(new NativeArray<Ellipsoid>(arr, Allocator.TempJob), toSimulate, 5);
     }
 
     private void OnDrawGizmos()
     {
-        if (probe == null || HashMap == null) return;
-
-        float3 result = fastestExit_world_fast(probe.transform.position, Ellipsoid.Position,
-            Ellipsoid.Rotation, Ellipsoid.HalfAxis);
-        float length = SdEllipsoid(probe.transform.position, Ellipsoid.Position,
-            Ellipsoid.Rotation, Ellipsoid.HalfAxis);
-
-        DrawArrow.ForGizmo(probe.transform.position, result * length * -1);
-
-        Ellipsoid[] arr = { Ellipsoid };
-        HashMap.SaveGridPositionsParallel(new NativeArray<Ellipsoid>(arr, Allocator.TempJob), 1);
-
-
-        for (int i = 0; i < HashMap.Entries.Length; i++)
-        {
-            Gizmos.color = Color.red;
-            Gizmos.DrawWireCube(
-                new Vector3(HashMap.Entries[i].Corner.x, HashMap.Entries[i].Corner.y, HashMap.Entries[i].Corner.z) +
-                Vector3.one * 0.5f, Vector3.one);
-        }
+        // if ( toSimulate.xpbd.HashMapEllipsoids == null) return;
+        //
+        // for (int i = 0; i < toSimulate.xpbd.HashMapEllipsoids.Entries.Length; i++)
+        // {
+        //     Gizmos.color = Color.red;
+        //     Gizmos.DrawWireCube(
+        //         new Vector3(toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.x, toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.y, toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.z) +
+        //         Vector3.one * 0.5f, Vector3.one);
+        // }
     }
 
     float3 dirExitApprox_local(float3 p, float3 r)

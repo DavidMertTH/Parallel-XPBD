@@ -37,6 +37,7 @@ namespace Parallel_XPBD
             _toSimulate.Destroyed += OnDestroy;
         }
 
+        [BurstCompile]
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
             bool solveCollisions)
         {
@@ -88,7 +89,7 @@ namespace Parallel_XPBD
                     if (i % collisionStepsPerSubsteps == 0)
                     {
                         prevJobs.Add(
-                            _toSimulate.xpbd.SpatialHashMap.AccessHashMapParallel(_nativePredictedPositions,
+                            _toSimulate.xpbd.HashMapEllipsoids.AccessHashMapParallel(_nativePredictedPositions,
                                 prevJobs.Last()));
                     }
                 }
@@ -106,7 +107,7 @@ namespace Parallel_XPBD
             _handle.Complete();
             if (predictedPositions != null) _nativePredictedPositions.CopyTo(predictedPositions);
             _toSimulate.xpbd.TimeLogger.StopSimClockwatch(!isDone);
-            
+
             _toSimulate.xpbd.SpatialHashMap.DisposeHashMap();
             _nativeParticles.Dispose();
             _nativeDistances.Dispose();

@@ -1,37 +1,64 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using Parallel_XPBD.Collisions;
+using myXpbd.Parallel_XPBD.Collisions;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using UnityEngine;
 using static Unity.Mathematics.math;
 using float3x3 = Unity.Mathematics.float3x3;
 
-namespace myXpbd.Parallel_XPBD.Collisions
+namespace Parallel_XPBD.Collisions
 {
     public class EllipsoidSpatialHash
     {
         public EllipsoidHashMapEntry[] Entries;
-        public float GridSize;
+        private bool _hashMapIsInitialized;
+        private NativeArray<EllipsoidHashMapEntry> _hashMap;
+        private float _gridSize;
 
-        public void SaveGlobalEllipsoidInLocalSpace(NativeArray<Ellipsoid> ellipsoids, XpbdMesh toSimulate, float gridSize)
+        public EllipsoidSpatialHash()
         {
+            Entries = Array.Empty<EllipsoidHashMapEntry>();
+        }
+
+        public void SaveGlobalEllipsoidInLocalSpace(NativeArray<Ellipsoid> ellipsoids, XpbdMesh toSimulate,
+            float gridSize)
+        {
+            _gridSize = gridSize;
             NativeArray<Ellipsoid> outEllipsoids = new NativeArray<Ellipsoid>(ellipsoids.Length, Allocator.TempJob);
             ToLocalEllipsoidsJob toLocalJob = new ToLocalEllipsoidsJob()
             {
-                WorldToLocal = toSimulate.transform.localToWorldMatrix,
+                WorldToLocal = toSimulate.transform.worldToLocalMatrix,
                 InEllipsoids = ellipsoids,
                 OutEllipsoids = outEllipsoids
             };
-            toLocalJob.ScheduleParallel(ellipsoids.Length, 32,default).Complete();
-            
+            toLocalJob.ScheduleParallel(ellipsoids.Length, 32, default).Complete();
+            SaveGridPositionsParallel(toLocalJob.OutEllipsoids, gridSize);
+            ellipsoids.Dispose();
+        }
+
+        public JobHandle AccessHashMapParallel(NativeArray<float3> positions, JobHandle previousJob)
+        {
+            if (!_hashMapIsInitialized)
+            {
+                _hashMap = new NativeArray<EllipsoidHashMapEntry>(Entries, Allocator.TempJob);
+                _hashMapIsInitialized = true;
+            }
+
+            AccessHashMap accessJob = new AccessHashMap()
+            {
+                AccessPoints = positions,
+                HashMap = _hashMap,
+                GridSize = _gridSize
+            };
+            return accessJob.Schedule(positions.Length, 32, previousJob);
         }
 
         public void SaveGridPositionsParallel(NativeArray<Ellipsoid> ellipsoids, float gridSize)
         {
-            GridSize = gridSize;
+            _hashMapIsInitialized = false;
             var myList = new NativeList<EllipsoidHashMapEntry>(50000, Allocator.TempJob);
 
             var fillJob = new FillEllipsoidHashMap()
@@ -412,6 +439,109 @@ namespace myXpbd.Parallel_XPBD.Collisions
         private static float Determinant(in float3x3 M)
         {
             return dot(M.c0, cross(M.c1, M.c2));
+        }
+    }
+
+    [BurstCompile]
+    public struct AccessHashMap : IJobParallelFor
+    {
+        public NativeArray<float3> AccessPoints;
+        [ReadOnly] public NativeArray<EllipsoidHashMapEntry> HashMap;
+        [ReadOnly] public float GridSize;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static int Hash3(int x, int y, int z)
+        {
+            unchecked
+            {
+                return (x * 73856093 ^ y * 19349663 ^ z * 83492791);
+            }
+        }
+
+        static int LowerBound(NativeArray<EllipsoidHashMapEntry> arr, int target)
+        {
+            int lo = 0;
+            int hi = arr.Length;
+            while (lo < hi)
+            {
+                int mid = lo + ((hi - lo) >> 1);
+                if (arr[mid].Hash < target) lo = mid + 1;
+                else hi = mid;
+            }
+
+            return lo;
+        }
+
+        public static float SdEllipsoid(float3 p, float3 center, Quaternion rotation, float3 r)
+        {
+            float3 pl = math.mul(math.conjugate(rotation), p - center);
+
+            float3 invR = 1f / r;
+            float3 invR2 = invR * invR;
+
+            float k0 = math.length(pl * invR);
+            float k1 = math.length(pl * invR2);
+
+            return k0 * (k0 - 1f) / k1;
+        }
+
+        static int UpperBound(NativeArray<EllipsoidHashMapEntry> arr, int target)
+        {
+            int lo = 0;
+            int hi = arr.Length;
+            while (lo < hi)
+            {
+                int mid = lo + ((hi - lo) >> 1);
+                if (arr[mid].Hash <= target) lo = mid + 1;
+                else hi = mid;
+            }
+
+            return lo;
+        }
+
+        public void Execute(int index)
+        {
+            float3 result = new float3();
+            int hash = Hash3(Mathf.FloorToInt(AccessPoints[index].x / GridSize),
+                Mathf.FloorToInt(AccessPoints[index].y / GridSize),
+                Mathf.FloorToInt(AccessPoints[index].z / GridSize));
+
+            int start = LowerBound(HashMap, hash);
+            if (start == HashMap.Length || HashMap[start].Hash != hash)
+                return;
+
+            int end = UpperBound(HashMap, hash);
+
+            for (int i = start; i < end; i++)
+            {
+                if (hash != HashMap[i].Hash) continue;
+
+                float distance = SdEllipsoid(AccessPoints[index], HashMap[i].Target.Position,
+                    HashMap[i].Target.Rotation, HashMap[i].Target.HalfAxis);
+                if (distance > 0f) continue;
+
+                float3 direction = fastestExit_world_fast(AccessPoints[index], HashMap[i].Target.Position,
+                    HashMap[i].Target.Rotation, HashMap[i].Target.HalfAxis);
+
+                result = direction;
+            }
+
+            AccessPoints[index] += result;
+        }
+
+        float3 dirExitApprox_local(float3 p, float3 r)
+        {
+            return math.normalize(p / (r * r));
+        }
+
+        float3 fastestExit_world_fast(float3 p, float3 center, Quaternion rotation, float3 r)
+        {
+            Quaternion q = math.normalize(rotation);
+            Quaternion qi = math.conjugate(q);
+
+            float3 pl = math.rotate(qi, p - center);
+            float3 dirL = dirExitApprox_local(pl, r);
+            return (math.rotate(q, dirL));
         }
     }
 

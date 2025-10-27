@@ -25,38 +25,49 @@ public class ElipsoidInteraction : MonoBehaviour
         {
             Position = transform.position,
             Rotation = transform.rotation,
-            HalfAxis = transform.localScale / 2
+            HalfAxis = (transform.localScale / 2) * (1.1f)
         };
         Ellipsoid[] arr = { Ellipsoid };
-        toSimulate.xpbd.HashMapEllipsoids.SaveGlobalEllipsoidInLocalSpace(new NativeArray<Ellipsoid>(arr, Allocator.TempJob), toSimulate, 5);
+        toSimulate.xpbd.HashMapEllipsoids.SaveGlobalEllipsoidInLocalSpace(
+            new NativeArray<Ellipsoid>(arr, Allocator.TempJob), toSimulate, 5);
     }
 
-    private void OnDrawGizmos()
+    private void OnDrawGizmosSelected()
     {
-        // if ( toSimulate.xpbd.HashMapEllipsoids == null) return;
-        //
-        // for (int i = 0; i < toSimulate.xpbd.HashMapEllipsoids.Entries.Length; i++)
-        // {
-        //     Gizmos.color = Color.red;
-        //     Gizmos.DrawWireCube(
-        //         new Vector3(toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.x, toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.y, toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.z) +
-        //         Vector3.one * 0.5f, Vector3.one);
-        // }
+        if (toSimulate.xpbd.HashMapEllipsoids == null) return;
+
+        for (int i = 0; i < toSimulate.xpbd.HashMapEllipsoids.Entries.Length; i++)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawWireCube(
+                new Vector3(toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.x,
+                    toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.y,
+                    toSimulate.xpbd.HashMapEllipsoids.Entries[i].Corner.z) +
+                Vector3.one * 0.5f, Vector3.one);
+        }
+
+        if (probe != null)
+        {
+            Gizmos.color = Color.white;
+            DrawArrow.ForGizmo(probe.transform.position,
+                fastestExit_world_fast(probe.transform.position, Ellipsoid.Position, Ellipsoid.Rotation,
+                    Ellipsoid.HalfAxis), Color.white);
+        }
     }
 
-    float3 dirExitApprox_local(float3 p, float3 r)
+    public float3 dirExitApprox_local(float3 p, float3 r)
     {
         return math.normalize(p / (r * r));
     }
 
-    float3 fastestExit_world_fast(float3 p, float3 center, Quaternion rotation, float3 r)
+    public float3 fastestExit_world_fast(float3 p, float3 center, Quaternion rotation, float3 r)
     {
         Quaternion q = math.normalize(rotation);
         Quaternion qi = math.conjugate(q);
 
         float3 pl = math.rotate(qi, p - center);
         float3 dirL = dirExitApprox_local(pl, r);
-        return (math.rotate(q, dirL));
+        return (math.rotate(q, dirL)) * -1 * SdEllipsoid(p, center, rotation, r);
     }
 
     public static float SdEllipsoid(float3 p, float3 center, Quaternion rotation, float3 r)

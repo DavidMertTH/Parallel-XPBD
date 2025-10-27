@@ -41,7 +41,7 @@ namespace Parallel_XPBD
         public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions,
             bool solveCollisions)
         {
-            int collisionStepsPerSubsteps = 49;
+            int collisionStepsPerSubsteps = 1;
             _toSimulate.xpbd.TimeLogger.StartSimClockwatch();
             float subStepLength = timeStepLength / subSteps;
             _nativeParticles = new NativeArray<Particle>(_toSimulate.Particles, Allocator.TempJob);
@@ -84,17 +84,9 @@ namespace Parallel_XPBD
                     PartToConst = _partToConst
                 };
                 prevJobs.Add(jacobiJobJob.Schedule(_nativeParticles.Length, 32, prevJobs.Last()));
-                if (solveCollisions)
+                if (solveCollisions && i % collisionStepsPerSubsteps == 0)
                 {
-                    if (i % collisionStepsPerSubsteps == 0)
-                    {
-                        prevJobs.Add(
-                            _toSimulate.xpbd.SpatialHashMap.AccessHashMapParallel(_nativePredictedPositions,
-                                prevJobs.Last()));
-                        // prevJobs.Add(
-                        // _toSimulate.xpbd.HashMapEllipsoids.AccessHashMapParallel(_nativePredictedPositions,
-                        // prevJobs.Last()));
-                    }
+                    SolveCollisionConstraints(ref prevJobs);
                 }
             }
 
@@ -102,6 +94,13 @@ namespace Parallel_XPBD
             _handle = prevJobs.Last();
         }
 
+        public void SolveCollisionConstraints(ref List<JobHandle> previousJobs)
+        {
+            previousJobs.Add(
+                _toSimulate.xpbd.HashMapEllipsoids.AccessHashMapParallel(_nativePredictedPositions,
+                    previousJobs.Last()));
+            
+        }
         public void FinnishJob(ref float3[] predictedPositions)
         {
             if (!_isRunning) return;

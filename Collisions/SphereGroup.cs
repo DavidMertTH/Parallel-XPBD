@@ -28,24 +28,23 @@ public class SphereGroupBurst_DataOnly : MonoBehaviour
     [Header("XPBD Target")]
     public XpbdMesh _toSimulate;
 
-    // Native Daten (reine Daten, keine Transforms)
-    private NativeArray<Sphere> _spheresNative;       // Ausgabe an dein System
-    private NativeArray<float3> _startPositions;      // Startpositionen
-    private NativeArray<float>  _phasePerSphere;      // Zufallsphasen für den Sinus
-    private NativeArray<float>  _radiusPerSphere;     // Basisradius pro Sphere
+    private NativeArray<Sphere> _spheresNative;       
+    private NativeArray<float3> _startPositions;      
+    private NativeArray<float>  _phasePerSphere;    
+    private NativeArray<float>  _radiusPerSphere;    
 
-    private const float kRadMul = 0.55f; // analog zu vorher (1.1f * 0.5f)
+    private const float kRadMul = 0.55f; 
 
     [BurstCompile]
     private struct MoveAndFillJob : IJobParallelFor
     {
-        public NativeArray<Sphere> Spheres;            // out
-        [ReadOnly] public NativeArray<float3> Starts;  // in
-        [ReadOnly] public NativeArray<float> Phases;   // in
-        [ReadOnly] public NativeArray<float> Radii;    // in
+        public NativeArray<Sphere> Spheres;            
+        [ReadOnly] public NativeArray<float3> Starts; 
+        [ReadOnly] public NativeArray<float> Phases;  
+        [ReadOnly] public NativeArray<float> Radii;   
 
-        public float TimeNow;   // Time.time
-        public float Amp;       // zAmplitude
+        public float TimeNow;   
+        public float Amp;     
 
         public void Execute(int index)
         {
@@ -60,7 +59,6 @@ public class SphereGroupBurst_DataOnly : MonoBehaviour
         }
     }
 
-    // ---------- Lifecycle ----------
     private void OnEnable()
     {
         if (randomSeed >= 0) Random.InitState(randomSeed);
@@ -72,7 +70,6 @@ public class SphereGroupBurst_DataOnly : MonoBehaviour
         DisposeNatives();
     }
 
-    // Live-Änderung im Play Mode
     private void OnValidate()
     {
         if (!Application.isPlaying) return;
@@ -80,7 +77,6 @@ public class SphereGroupBurst_DataOnly : MonoBehaviour
         if (radiusRange.x > radiusRange.y)
             radiusRange = new Vector2(radiusRange.y, radiusRange.x);
 
-        // Wenn sich activeSpheres ändert → Arrays anpassen
         ResizeActiveCount(activeSpheres);
     }
 
@@ -103,7 +99,6 @@ public class SphereGroupBurst_DataOnly : MonoBehaviour
         var handle = job.Schedule(_spheresNative.Length, 64); // batch size 64
         handle.Complete();
 
-        // Dein Kollisionssystem erhält direkt das NativeArray mit Spheres
         _toSimulate.xpbd.SpatialHashMap.EnterSpheres(_spheresNative, _toSimulate, 3);
         _toSimulate.xpbd.TimeLogger.StopCollisionEntryClockwatch();
     }

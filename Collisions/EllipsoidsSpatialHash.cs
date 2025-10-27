@@ -36,7 +36,6 @@ namespace Parallel_XPBD.Collisions
             };
             toLocalJob.ScheduleParallel(ellipsoids.Length, 32, default).Complete();
             SaveGridPositionsParallel(toLocalJob.OutEllipsoids, gridSize);
-            ellipsoids.Dispose();
         }
 
         public JobHandle AccessHashMapParallel(NativeArray<float3> positions, JobHandle previousJob)
@@ -523,7 +522,7 @@ namespace Parallel_XPBD.Collisions
                 float3 direction = fastestExit_world_fast(AccessPoints[index], HashMap[i].Target.Position,
                     HashMap[i].Target.Rotation, HashMap[i].Target.HalfAxis);
 
-                result = direction;
+                result = math.normalize(direction) *  -1* distance;
             }
 
             AccessPoints[index] += result;

@@ -16,7 +16,7 @@ namespace Parallel_XPBD
             Lambdas = new float[_toSimulate.Distances.Length];
         }
 
-        public void SolveDistanceConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions)
+        public void SolveConstraints(float timeStepLength, int subSteps, ref float3[] predictedPositions)
         {
             float subStepLength = timeStepLength / subSteps;
 

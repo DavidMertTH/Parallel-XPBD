@@ -1,5 +1,6 @@
 using System;
 using Parallel_XPBD.Collisions;
+using Unity.Mathematics;
 using UnityEngine;
 
 public class InteractionSphere : MonoBehaviour
@@ -18,4 +19,5 @@ public class InteractionSphere : MonoBehaviour
         _sphere.Position = transform.position;
         // if (xpbdMesh.handleCollisions) xpbdMesh.xpbd.SpatialHashMap.EnterSpheres(new Sphere[] { _sphere }, xpbdMesh, 2);
     }
+    
 }

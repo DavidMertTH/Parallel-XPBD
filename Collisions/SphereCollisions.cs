@@ -8,12 +8,12 @@ namespace Parallel_XPBD.Collisions
 {
     public class SphereCollisions
     {
-        public SpatialHashMap HashMap;
+        public SphereMap Map;
         private Sphere[] _spheresInLocalSpace;
 
         public SphereCollisions()
         {
-            HashMap = new SpatialHashMap();
+            Map = new SphereMap();
         }
 
        

@@ -30,8 +30,8 @@ public class Xpbd
     private bool _isWarm;
     public TimeLogger TimeLogger;
     public event Action SimulationIsFinnished;
-    public SpatialHashMap SpatialHashMap;
-    public EllipsoidSpatialHash HashMapEllipsoids;
+    public SphereMap SphereMap;
+    public EllipsoidMap HashMapEllipsoids;
 
     private SelfCollisions _selfCollisions;
 
@@ -51,15 +51,16 @@ public class Xpbd
         _jacobiXpbdSolver = new JacobiXpbdSolver(_toSimulate);
         _colorGroupXpbdSolver = new ColorGroupXpbdSolver(_toSimulate);
         TimeLogger = new TimeLogger();
-        SpatialHashMap = new SpatialHashMap();
-        HashMapEllipsoids = new EllipsoidSpatialHash();
+        SphereMap = new SphereMap();
+        HashMapEllipsoids = new EllipsoidMap();
         _selfCollisions = new SelfCollisions();
     }
 
     public void DisposeEverything()
     {
         _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
-        SpatialHashMap.OnDestroy();
+        SphereMap.OnDestroy();
+        HashMapEllipsoids.OnDestroy();
     }
 
     public void SetSolver(Solver solver)
@@ -84,27 +85,34 @@ public class Xpbd
     public void Simulate(int subSteps)
     {
         _jacobiXpbdSolver.FinnishJob(ref ParticlePositions);
-        if (handleSelfCollisions) ParticlePositions = _selfCollisions.HandleSelfCollisions(ParticlePositions);
         if (_isWarm) UpdatePartícles();
+        //InputSelfCollisions();
         SimulationIsFinnished?.Invoke();
+        HashMapEllipsoids.StartFillHashMap(_toSimulate, 10);
         Integrate();
-        _jacobiXpbdSolver.SolveDistanceConstraints(TimeStepLength, subSteps, ref ParticlePositions, handleCollisions);
+        HashMapEllipsoids.CompleteHashMapFill();
+
+        _jacobiXpbdSolver.SolveConstraints(TimeStepLength, subSteps, ref ParticlePositions);
+
         _isWarm = true;
     }
 
     public void InputSelfCollisions()
     {
-        Sphere[] particleSpheres = new Sphere[_toSimulate.Particles.Length];
+        Ellipsoid[] particleEllipsoid = new Ellipsoid[_toSimulate.Particles.Length];
         for (int i = 0; i < ParticlePositions.Length; i++)
         {
-            particleSpheres[i] = new Sphere
+            particleEllipsoid[i] = new Ellipsoid()
             {
                 Position = _toSimulate.transform.TransformPoint(ParticlePositions[i]),
-                Radius = 0.01f
+                HalfAxis = new float3(0.4f, 0.4f, 0.4f),
+                Rotation = quaternion.identity,
+                Velocity = float3.zero, //_toSimulate.Particles[i].Velocity,
+                Index = i
             };
         }
 
-        // SpatialHashMap.EnterSpheres(particleSpheres, _toSimulate);
+        HashMapEllipsoids.AddEllipsoidsToQueue(particleEllipsoid);
     }
 
     private void Integrate()
@@ -161,6 +169,7 @@ public class Xpbd
                 InvMass = Particles[index].InvMass,
                 Position = PredictedPositions[index],
                 Velocity = (PredictedPositions[index] - Particles[index].Position) / TimeStepLength,
+                IsActive = Particles[index].IsActive,
             };
             Particles[index] = particle;
         }

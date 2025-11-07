@@ -8,5 +8,7 @@ namespace myXpbd.Parallel_XPBD.Collisions
         public float3 Position;
         public quaternion Rotation;
         public float3 HalfAxis;
+        public float3 Velocity;
+        public int Index;
     }
 }

@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using Parallel_XPBD;
 using Parallel_XPBD.Collisions;
+using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
 
 public class XpbdMesh : MonoBehaviour
@@ -13,20 +15,16 @@ public class XpbdMesh : MonoBehaviour
     public int ySize = 20;
     public bool reset;
     public bool drawGizmos;
-    public Xpbd.Solver solver;
-    public SphereChain collidingSpheres;
-    public SpatialHashMap HashMapSpheres;
-    public SpatialHashMap HashMapSelf;
-    public Display debugUi;
+    //public Xpbd.Solver solver;
     public bool handleCollisions;
-    public bool handleSelfCollisions;
-
-    [Range(1, 200)] public int subSteps = 50;
+    public bool sweepVolume;
+    
+    [Range(0, 1)] public float collisionResolution = 1;
+    [Range(1, 400)] public int subSteps = 50;
     [Range(0f, 1f)] public float dampening = 0.05f;
     [Range(0f, 10000f)] public float compliance = 0.000000001f;
     [Range(0f, 10000f)] public float sheerCompliance = 0.000000001f;
     [Range(0f, 10000f)] public float bendingCompliance = 0.000000001f;
-
     [Range(0f, 1 / 50f)] public float timeStep = 1 / 20000f;
 
     public Particle[] Particles;
@@ -38,14 +36,13 @@ public class XpbdMesh : MonoBehaviour
     private MeshFilter _meshFilter;
 
 
-    void Awake()
+    void Start()
     {
         Reset(false);
-        HashMapSpheres = new SpatialHashMap();
-        HashMapSelf = new SpatialHashMap();
+        JobsUtility.JobDebuggerEnabled = false;
     }
 
-    private void Update()
+    private void LateUpdate()
     {
         if (reset)
         {
@@ -69,11 +66,9 @@ public class XpbdMesh : MonoBehaviour
         xpbd.handleCollisions = handleCollisions;
         xpbd.Dampening = dampening;
         xpbd.TimeStepLength = this.timeStep;
-        xpbd.handleSelfCollisions = handleSelfCollisions;
         SetupMesh();
         reset = false;
-        xpbd.SetSolver(solver);
-        transform.localScale = Vector3.one / xSize * 30;
+        //transform.localScale = Vector3.one / xSize * 30;
     }
 
     private void OnDestroy()
@@ -88,12 +83,19 @@ public class XpbdMesh : MonoBehaviour
         _mesh = new Mesh();
         _meshFilter.mesh = _mesh;
         _mesh.vertices = new Vector3[xSize * ySize];
+        Vector2[] uvs = new Vector2[xSize * ySize];
 
         List<int> triangles = new List<int>();
         for (int i = 0; i < Particles.Length; i++)
         {
-            if (i < xSize || i % xSize == xSize - 1) continue;
+            int xPos = i % xSize;
+            int yPos = i / xSize;
 
+            uvs[i] = new Vector2((float)xPos / xSize, (float)yPos / ySize);
+
+            if (i < xSize || i % xSize == xSize - 1) continue;
+            if (!Particles[i].IsActive || !Particles[i - xSize].IsActive || !Particles[i + 1].IsActive ||
+                !Particles[i - xSize + 1].IsActive) continue;
             triangles.Add(i - xSize);
             triangles.Add(i);
             triangles.Add(i + 1);
@@ -104,6 +106,8 @@ public class XpbdMesh : MonoBehaviour
         }
 
         _mesh.triangles = triangles.ToArray();
+        _mesh.uv = uvs;
+        _mesh.uv2 = uvs;
     }
 
     private void UpdateMesh()
@@ -140,13 +144,50 @@ public class XpbdMesh : MonoBehaviour
             {
                 Position = positions[i],
                 Velocity = velocitys[i],
-                InvMass = invMass
+                InvMass = invMass,
+                IsActive = true
             };
         }
 
         Distances = GetDistanceConstraints();
     }
 
+    private void CreateParticlesForPoncho()
+    {
+        Particles = new Particle[xSize * ySize];
+        ParticleToConst = new int[12 * ySize * xSize];
+        for (int i = 0; i < ParticleToConst.Length; i++)
+        {
+            ParticleToConst[i] = -1;
+        }
+
+        Vector3[] positions = GetParticlePositions();
+        Vector3[] velocitys = new Vector3[Particles.Length];
+
+        for (int i = 0; i < Particles.Length; i++)
+        {
+            float invMass = 1f;
+            //if (i == 0 || i == xSize - 1) invMass = 0f;
+
+            int xPos = i % xSize;
+            int yPos = i / xSize;
+            bool isInXRange = xPos > (xSize / 2) - (int)((float)xSize / 15) &&
+                              xPos < (xSize / 2) + (int)((float)xSize / 15);
+            bool isInYRange = yPos > (ySize / 2) - (int)((float)ySize / 15) &&
+                              yPos < (ySize / 2) + (int)((float)ySize / 15);
+            bool activeParticle = !(isInXRange && isInYRange);
+
+            Particles[i] = new Particle()
+            {
+                Position = positions[i],
+                Velocity = velocitys[i],
+                InvMass = invMass,
+                IsActive = activeParticle
+            };
+        }
+
+        Distances = GetDistanceConstraints();
+    }
 
     private DistanceConstraint[] GetDistanceConstraints()
     {
@@ -350,6 +391,8 @@ public class XpbdMesh : MonoBehaviour
 
         for (int i = 0; i < Particles.Length; i++)
         {
+            if (Particles[i].IsActive) Gizmos.color = Color.green;
+            else Gizmos.color = Color.red;
             Gizmos.DrawSphere(Particles[i].Position, 0.1f);
         }
     }
@@ -360,6 +403,7 @@ public struct Particle
     public float InvMass;
     public float3 Position;
     public float3 Velocity;
+    public bool IsActive;
 }
 
 public struct DistanceConstraint

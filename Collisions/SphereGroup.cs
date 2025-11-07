@@ -7,7 +7,7 @@ using Unity.Mathematics;
 using UnityEngine;
 using Random = UnityEngine.Random;
 
-public class SphereGroupBurst_DataOnly : MonoBehaviour
+public class SphereGroup : MonoBehaviour
 {
     [Header("Control")]
     [Min(0)]
@@ -99,7 +99,7 @@ public class SphereGroupBurst_DataOnly : MonoBehaviour
         var handle = job.Schedule(_spheresNative.Length, 64); // batch size 64
         handle.Complete();
 
-        _toSimulate.xpbd.SpatialHashMap.EnterSpheres(_spheresNative, _toSimulate, 3);
+        _toSimulate.xpbd.SphereMap.EnterSpheres(_spheresNative, _toSimulate, 3);
         _toSimulate.xpbd.TimeLogger.StopCollisionEntryClockwatch();
     }
 

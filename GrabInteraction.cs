@@ -94,7 +94,8 @@ public class GrabInteraction : MonoBehaviour
         {
             Velocity = Vector3.zero,
             Position = endPoint,
-            InvMass = 0
+            InvMass = 0,
+            IsActive = _xpbdMesh.Particles[_currentVertexToMove].IsActive
         };
     }
 

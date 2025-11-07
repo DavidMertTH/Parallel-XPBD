@@ -83,7 +83,7 @@ public class EllipsoidGroup : MonoBehaviour
         AllocateAndInit(activeEllipsoids, keepExisting: false);
     }
 
-    private void OnDisable()
+    private void OnDestroy()
     {
         DisposeNatives();
     }
@@ -120,7 +120,9 @@ public class EllipsoidGroup : MonoBehaviour
 
         // ⬇️ Trage die Ellipsoide in deine XPBD-Struktur ein
         // Falls du eine passende Methode hast, z. B. EnterEllipsoids(...):
-         _toSimulate.xpbd.HashMapEllipsoids.SaveGlobalEllipsoidInLocalSpace(_ellipsoidsNative, _toSimulate, 3);
+        Ellipsoid[] arr = new Ellipsoid[_ellipsoidsNative.Length];
+        _ellipsoidsNative.CopyTo(arr);
+        _toSimulate.xpbd.HashMapEllipsoids.AddEllipsoidsToQueue(arr);
 
         // Platzhalter: Wenn du (noch) keine EnterEllipsoids hast, baue sie analog zu EnterSpheres.
         _toSimulate.xpbd.TimeLogger.StopCollisionEntryClockwatch();
@@ -221,6 +223,7 @@ public class EllipsoidGroup : MonoBehaviour
 
     private void DisposeNatives()
     {
+        Debug.Log("DisposeNatives");
         if (_ellipsoidsNative.IsCreated)  _ellipsoidsNative.Dispose();
         if (_startPositions.IsCreated)    _startPositions.Dispose();
         if (_phasePerEllipsoid.IsCreated) _phasePerEllipsoid.Dispose();

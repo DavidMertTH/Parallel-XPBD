@@ -1,2 +1,5 @@
-# Parallel-XPBD
-Parallel XPBD implemented in Unity by David Mertens
+# ClothSimulation
+
+## Updates 
+- 21.10.2025 Initial commit 
+
